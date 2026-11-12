@@ -11,20 +11,29 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from threading import Event, Lock, Thread
 
+import parecer
+
 ROOT = Path(os.environ.get("IPTU_DATA_DIR", "/data"))
 CHUNK = 8 * 1024**2
 MAX_UPLOAD = 48 * 1024**3
 MAX_EXTRACTED = 150 * 1024**3
 MAX_ENTRIES = 100_000
-PROCESS_ID = re.compile(r"\d{7}\.\d{3}\.\d{8}-\d{4}-\d{2}")
+PROCESS_ID = re.compile(r"(?<![0-9])[0-9]{7}\.[0-9]{3}\.[0-9]{8}-[0-9]{4}-[0-9]{2}(?![0-9])")
 ID = re.compile(r"[a-f0-9]{32}")
 WAKE = Event()
 LOCK = Lock()
 KINDS = ("requerimento", "identidade", "cpf", "residencia", "beneficio", "posse",
-         "procuracao", "certidao", "laudo", "outro")
+         "procuracao", "certidao", "laudo", "holerite", "outro")
 FIELDS = {"exercicio": int, "reside_no_imovel": bool, "nome_requerente": str,
           "cpf_requerente": str, "cpf_conjuge": str, "inscricao_imobiliaria": str,
           "modalidade": str}
+ASSESSMENT_FIELDS = {
+    "modalidade_criterio": str, "data_protocolo": str, "endereco_declarado": str,
+    "possui_edicula": bool, "edicula_alugada": bool, "edicula_uso_comercial": bool,
+    "vinculo_imovel": str, "renda_bruta_centavos": int, "competencia_renda": str,
+    "titular_renda": str, "atividade_economica_declarada": bool,
+}
+PAGE_SCHEMA = 2
 
 
 def save(path, value):
@@ -111,6 +120,23 @@ def copy_member(source, target, limit):
         return written
 
 
+def sei_numbers(origin):
+    return set(PROCESS_ID.findall(origin))
+
+
+def sei_identity(process):
+    found = []
+    for item in process["arquivos"]:
+        parts = PurePosixPath(item["origem"]).parts
+        for index, part in enumerate(parts):
+            for number in sorted(sei_numbers(part)):
+                found.append({"numero": number, "origem": item["origem"],
+                              "fonte": "nome_do_arquivo" if index == len(parts) - 1 else "caminho"})
+    values = {source["numero"] for source in found}
+    return {"numero_processo_sei": next(iter(values)) if len(values) == 1 else None,
+            "sei_divergente": len(values) > 1, "fontes_numero_sei": found}
+
+
 def inventory(path, name):
     files = path / "files"
     files.mkdir(exist_ok=True)
@@ -122,8 +148,11 @@ def inventory(path, name):
 
     def add(original, file_id=None, error=None):
         parts = PurePosixPath(original).parts
-        external = next((part for part in parts if PROCESS_ID.fullmatch(part)), None)
+        numbers = sei_numbers(original)
+        external = next(iter(numbers), None) if len(numbers) == 1 else None
         key = external or (parts[0] if len(parts) > 1 else Path(name).stem)
+        if len(numbers) > 1:
+            key = "Divergência SEI · " + " / ".join(sorted(numbers))
         process = processes.setdefault(key, {"id": uuid.uuid4().hex, "processo": key, "arquivos": []})
         process["arquivos"].append({"id": file_id, "origem": original, "erro": error})
 
@@ -224,7 +253,9 @@ def process_batch(path, analyze):
             for number in range(1, count + 1):
                 evidence = folder / f"{key}-{number}.json"
                 if evidence.exists():
-                    continue
+                    previous = load(evidence)
+                    if previous.get("versao_extracao") == PAGE_SCHEMA and previous.get("status") == "extraido":
+                        continue
                 result = {"status": "pagina_inacessivel"}
                 try:
                     image = render_page(pdf, number)
@@ -235,7 +266,7 @@ def process_batch(path, analyze):
                             result = analyze(image)
                 except (OSError, subprocess.TimeoutExpired):
                     pass
-                save(evidence, result)
+                save(evidence, {**result, "versao_extracao": PAGE_SCHEMA})
         save(folder / "complete.json", {"concluido": True})
     state["status"] = "concluido"
     save(path / "batch.json", state)
@@ -305,4 +336,6 @@ def process_detail(path, process_id):
         process["pendencias"].append("Há arquivos ou páginas com falha de leitura.")
     review = folder / "review.json"
     process["revisao"] = load(review) if review.exists() else None
+    process.update(sei_identity(process))
+    process["parecer"] = parecer.assess(process, process["revisao"])
     return process

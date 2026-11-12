@@ -72,6 +72,7 @@ async function refreshProcesses() {
   if (!key) return;
   const lot = await request(base + '/' + key);
   if (batchList.value !== key) return;
+  get('reanalisar').hidden = !['concluido', 'falha'].includes(lot.status);
   const done = lot.processos.filter((row) => row.concluido).length;
   get('batch-status').textContent = lot.status + ' · ' + done + '/' + lot.processos.length + ' processos lidos' +
     (lot.motivo ? ' · ' + lot.motivo : '');
@@ -95,6 +96,7 @@ function clearProcess() {
   get('original').hidden = true;
   for (const id of ['issues', 'pages', 'files']) get(id).replaceChildren();
   get('notes').hidden = true;
+  get('parecer').hidden = true;
   get('note-status').textContent = '';
   get('process-status').textContent = 'Selecione um processo.';
   processList.value = '';
@@ -110,7 +112,30 @@ async function showProcess() {
   const detail = await request(path + '/processos/' + id);
   if (batchList.value !== key || processList.value !== id) return;
   currentPdfBase = path + '/pdf';
-  get('process-status').textContent = detail.processo + ' · ' + detail.status;
+  get('process-status').textContent = (detail.numero_processo_sei || detail.processo) + ' · ' + detail.status;
+  const report = detail.parecer;
+  get('parecer').hidden = false;
+  get('parecer-status').textContent = {
+    proposta_deferimento: 'Pode receber · proposta de deferimento',
+    proposta_indeferimento: 'Não pode receber · proposta de indeferimento',
+    em_analise: 'Em análise · conferência necessária'
+  }[report.status];
+  get('parecer-json').href = path + '/processos/' + id + '/parecer';
+  get('criterios').replaceChildren();
+  for (const row of report.criterios) {
+    const li = document.createElement('li');
+    li.textContent = row.status + ' · ' + row.motivo;
+    for (const source of row.evidencias) {
+      if (source.arquivo) {
+        const link = document.createElement('button');
+        link.type = 'button';
+        link.textContent = 'Ver página ' + source.pagina;
+        link.onclick = () => showPdf(source.arquivo, source.pagina);
+        li.append(' ', link);
+      }
+    }
+    get('criterios').append(li);
+  }
   for (const text of detail.pendencias) addText(get('issues'), text);
   for (const doc of detail.arquivos) if (doc.erro) addText(get('issues'), doc.origem + ' · ' + doc.erro);
   const files = detail.arquivos.filter((doc) => doc.id);
@@ -134,7 +159,15 @@ async function showProcess() {
     get('pages').append(item);
   }
   get('notes').hidden = detail.status !== 'em_revisao';
+  get('notes').reset();
   get('note').value = detail.revisao?.nota || '';
+  for (const [field, value] of Object.entries(detail.revisao?.confirmacoes || {})) {
+    const input = get('notes').elements.namedItem(field);
+    if (input) input.value = value;
+  }
+  const amount = detail.revisao?.renda_bruta_familiar_centavos;
+  if (amount != null) get('notes').elements.renda.value = (amount / 100).toFixed(2).replace('.', ',');
+  get('notes').elements.fonte_renda.value = detail.revisao?.fonte_renda || '';
   get('note-status').textContent = detail.revisao ? 'Revisão registrada.' : '';
 }
 
@@ -142,8 +175,17 @@ get('notes').addEventListener('submit', async (event) => {
   event.preventDefault();
   const path = base + '/' + batchList.value + '/processos/' + processList.value + '/revisao';
   try {
-    await request(path, {method:'POST', body:JSON.stringify({nota:get('note').value})});
-    get('note-status').textContent = 'Revisão registrada.';
+    const form = new FormData(get('notes'));
+    const {renda, fonte_renda, ...fields} = Object.fromEntries(form);
+    const amount = renda.trim();
+    const parts = /^(\d+)(?:[,.](\d{1,2}))?$/.exec(amount);
+    if (amount && !parts) throw new Error('Informe a renda em reais, por exemplo 3242,00.');
+    const cents = parts ? Number(parts[1]) * 100 + Number((parts[2] || '').padEnd(2, '0')) : null;
+    const confirmacoes = Object.fromEntries(Object.entries(fields).filter(([, value]) => value.trim()));
+    await request(path, {method:'POST', body:JSON.stringify({
+      nota:get('note').value, confirmacoes, fonte_renda, renda_bruta_familiar_centavos:cents
+    })});
+    await showProcess();
   } catch (error) {
     get('note-status').textContent = error.message;
   }
@@ -152,6 +194,13 @@ get('notes').addEventListener('submit', async (event) => {
 function report(error) { get('batch-status').textContent = 'Falha: ' + error.message; }
 batchList.onchange = () => { clearProcess(); refreshProcesses().catch(report); };
 processList.onchange = () => showProcess().catch(report);
+get('reanalisar').onclick = async () => {
+  try {
+    await request(base + '/' + batchList.value + '/reanalisar', {method:'POST'});
+    await refreshProcesses();
+    await showProcess();
+  } catch (error) { report(error); }
+};
 get('reload').onclick = () => showProcess().catch(report);
 fileList.onchange = () => showPdf(fileList.value);
 refreshBatches().catch(report);

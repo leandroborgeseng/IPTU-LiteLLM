@@ -4,7 +4,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY app.py batch.py lotes.html lotes.js ./
+COPY app.py batch.py parecer.py lotes.html lotes.js ./
 RUN install -d -m 0700 -o 10001 -g 10001 /data
 COPY fixtures/ ./fixtures/
 USER 10001:10001

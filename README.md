@@ -103,3 +103,21 @@ Na tela de conferência, selecione o lote, o processo e uma página. A imagem
 da página aparece ao lado dos campos extraídos. A nota de conferência é
 persistida. Este piloto não consulta a SIL, não verifica elegibilidade e
 não grava no F4. O diagnóstico anterior continua disponível no menu.
+
+## Parecer preliminar e número SEI
+
+O lote agrupa arquivos pelo número SEI completo quando ele aparece no nome
+do arquivo ou no caminho. A tela e o JSON guardam as origens encontradas.
+Conflitos entre arquivo e pasta exigem conferência. Use **Reanalisar lote**
+para atualizar extrações antigas. Se os arquivos de um lote antigo precisarem
+ser reagrupados pelos nomes, importe o ZIP novamente.
+
+O parecer é calculado para o fluxo de aposentadoria, pensão, BPC e renda mensal
+vitalícia de Franca, exercício 2027. A IA lê os campos e comprovantes por página.
+A tela permite registrar evidências humanas e exportar o JSON com critérios,
+motivos e páginas. Use o total bruto familiar mensal conferido, sem somar
+automaticamente comprovantes duplicados, valores de meses diferentes ou
+rendimentos de terceiros. O teto de R$ 3.242,00 é o publicado pela Prefeitura
+para o período de solicitação em 2026. Casos sociais ficam em análise.
+As confirmações cadastrais são registradas pelo operador. A consulta automática
+à SIL e a decisão oficial no SEI/F4 ainda estão fora desta entrega.

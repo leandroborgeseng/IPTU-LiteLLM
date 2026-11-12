@@ -34,6 +34,7 @@ small { color: #42546b; }
 <h2>Lotes</h2>
 <label>Lote <select id="batches"></select></label>
 <p id="batch-status" role="status"></p>
+<button id="reanalisar" type="button" hidden>Reanalisar lote</button>
 <label>Processo <select id="processes"></select></label> <button id="reload" type="button">Atualizar processo</button>
 </section>
 <div id="review">
@@ -46,10 +47,28 @@ small { color: #42546b; }
 <section>
 <h2>Conferência</h2>
 <p id="process-status" role="status">Selecione um processo.</p>
+<div id="parecer" hidden>
+<h3>Parecer preliminar</h3>
+<p id="parecer-status"></p>
+<ul id="criterios"></ul>
+<a id="parecer-json" download="parecer-iptu.json">Baixar JSON do parecer</a>
+</div>
 <ul id="issues"></ul>
 <h3>Páginas e campos</h3>
 <ul id="pages"></ul>
 <form id="notes" hidden>
+<details>
+<summary>Registrar evidências conferidas</summary>
+<p>Preencha os critérios que você conferiu com o documento, página ou referência cadastral.</p>
+<label>Identidade e composição familiar <input name="identidade" maxlength="500"></label><br>
+<label>Titularidade do benefício <input name="beneficio" maxlength="500"></label><br>
+<label>Vínculo e imóvel único no cadastro <input name="imovel" maxlength="500"></label><br>
+<label>Residência no imóvel <input name="residencia" maxlength="500"></label><br>
+<label>Edícula e uso <input name="edícula" maxlength="500"></label><br>
+<label>Data oficial e prazo <input name="prazo" maxlength="500"></label><br>
+<label>Renda bruta familiar mensal em reais <input name="renda" inputmode="decimal" placeholder="3242,00"></label><br>
+<label>Fonte e competência da renda <input name="fonte_renda" maxlength="500"></label>
+</details>
 <label>Nota de revisão <textarea id="note" maxlength="2000" required></textarea></label>
 <button>Salvar revisão</button>
 </form>
