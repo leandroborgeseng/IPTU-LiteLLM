@@ -1,0 +1,21 @@
+services:
+  worker:
+    build: .
+    environment:
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:?Defina a URL do LiteLLM}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:?Configure a chave do LiteLLM}
+      IPTU_ADMIN_USER: ${IPTU_ADMIN_USER:-iptu}
+      IPTU_ADMIN_PASSWORD: ${IPTU_ADMIN_PASSWORD:?Configure a senha do painel}
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/healthz', timeout=2).close()"]
+      interval: 30s
+      timeout: 4s
+      retries: 3
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
