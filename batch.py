@@ -9,7 +9,7 @@ import time
 import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
-from threading import Event, Lock, Thread
+from threading import Event, RLock, Thread
 
 import parecer
 
@@ -21,7 +21,7 @@ MAX_ENTRIES = 100_000
 PROCESS_ID = re.compile(r"(?<![0-9])[0-9]{7}\.[0-9]{3}\.[0-9]{8}-[0-9]{4}-[0-9]{2}(?![0-9])")
 ID = re.compile(r"[a-f0-9]{32}")
 WAKE = Event()
-LOCK = Lock()
+LOCK = RLock()
 KINDS = ("requerimento", "identidade", "cpf", "residencia", "beneficio", "posse",
          "procuracao", "certidao", "laudo", "holerite", "outro")
 FIELDS = {"exercicio": int, "reside_no_imovel": bool, "nome_requerente": str,
@@ -34,6 +34,33 @@ ASSESSMENT_FIELDS = {
     "titular_renda": str, "atividade_economica_declarada": bool,
 }
 PAGE_SCHEMA = 2
+
+
+class ResetRequested(Exception):
+    pass
+
+
+def reset_pending():
+    return (ROOT / ".limpeza_pendente").exists()
+
+
+def check_reset():
+    if reset_pending():
+        raise ResetRequested
+
+
+def request_reset():
+    with LOCK:
+        (ROOT / ".limpeza_pendente").touch()
+        WAKE.set()
+
+
+def clear_batches():
+    with LOCK:
+        for path in ROOT.iterdir():
+            if ID.fullmatch(path.name) and path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+        (ROOT / ".limpeza_pendente").unlink(missing_ok=True)
 
 
 def save(path, value):
@@ -83,6 +110,7 @@ def describe(path):
 
 def append(path, start, data):
     with LOCK:
+        check_reset()
         value = describe(path)
         if value["status"] != "recebendo" or start != value["recebido"]:
             return 409, value
@@ -101,6 +129,7 @@ def append(path, start, data):
 
 def queue(path):
     with LOCK:
+        check_reset()
         value = describe(path)
         if value["status"] == "recebendo" and value["bytes"] == value["recebido"]:
             value["status"] = "na_fila"
@@ -113,6 +142,7 @@ def copy_member(source, target, limit):
     with target.open("wb") as out:
         written = 0
         while chunk := source.read(1024**2):
+            check_reset()
             written += len(chunk)
             if written > limit:
                 raise ValueError("limite_de_extracao")
@@ -160,6 +190,7 @@ def inventory(path, name):
         nonlocal total, entries
         with zipfile.ZipFile(source) as archive:
             for item in archive.infolist():
+                check_reset()
                 if item.is_dir():
                     continue
                 entries += 1
@@ -225,7 +256,9 @@ def render_page(pdf, number):
 
 def process_batch(path, analyze):
     state = load(path / "batch.json")
+    check_reset()
     state["status"] = "processando"
+    state.pop("progresso", None)
     save(path / "batch.json", state)
     manifest = path / "manifest.json"
     if not manifest.exists():
@@ -235,6 +268,7 @@ def process_batch(path, analyze):
         folder = path / process["id"]
         folder.mkdir(exist_ok=True)
         for file in process["arquivos"]:
+            check_reset()
             if not file["id"]:
                 continue
             key = file["id"]
@@ -251,23 +285,34 @@ def process_batch(path, analyze):
                 save(count_path, {"paginas": min(count, 1000), "total": count})
             count = load(count_path)["paginas"]
             for number in range(1, count + 1):
+                check_reset()
                 evidence = folder / f"{key}-{number}.json"
                 if evidence.exists():
                     previous = load(evidence)
                     if previous.get("versao_extracao") == PAGE_SCHEMA and previous.get("status") == "extraido":
                         continue
+                state["progresso"] = {"pagina": number, "total_paginas": count, "etapa": "renderizando"}
+                save(path / "batch.json", state)
                 result = {"status": "pagina_inacessivel"}
                 try:
                     image = render_page(pdf, number)
                     if image is not None:
+                        check_reset()
+                        state["progresso"]["etapa"] = "consultando_ia"
+                        save(path / "batch.json", state)
                         result = analyze(image)
                         if result["status"] == "falha_de_conexao" or result.get("codigo") in {429, 502, 503, 504}:
+                            check_reset()
+                            state["progresso"]["etapa"] = "nova_tentativa_ia"
+                            save(path / "batch.json", state)
                             time.sleep(1)
                             result = analyze(image)
                 except (OSError, subprocess.TimeoutExpired):
                     pass
+                check_reset()
                 save(evidence, {**result, "versao_extracao": PAGE_SCHEMA})
         save(folder / "complete.json", {"concluido": True})
+    state.pop("progresso", None)
     state["status"] = "concluido"
     save(path / "batch.json", state)
 
@@ -275,21 +320,41 @@ def process_batch(path, analyze):
 def run_worker(analyze):
     while True:
         WAKE.clear()
+        if reset_pending():
+            try:
+                clear_batches()
+            except OSError as error:
+                print(f"Falha ao limpar lotes: {type(error).__name__}", flush=True)
+                WAKE.wait(3)
+            continue
         for meta in ROOT.glob("*/batch.json"):
-            state = load(meta)
+            if reset_pending():
+                break
+            try:
+                state = load(meta)
+            except (OSError, ValueError) as error:
+                print(f"Falha ao carregar lote {meta.parent.name}: {type(error).__name__}", flush=True)
+                continue
             if state["status"] not in {"na_fila", "processando"}:
                 continue
             try:
                 process_batch(meta.parent, analyze)
-            except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            except ResetRequested:
+                break
+            except Exception as exc:
+                print(f"Falha no lote {meta.parent.name}: {type(exc).__name__}", flush=True)
                 state["status"] = "falha"
                 state["motivo"] = (
                     "zip_invalido" if isinstance(exc, zipfile.BadZipFile)
                     else str(exc) if str(exc) in {"espaco_insuficiente", "limite_de_entradas"}
                     else "falha_de_importacao"
                 )
-                save(meta, state)
-        WAKE.wait(3)
+                try:
+                    save(meta, state)
+                except OSError as error:
+                    print(f"Falha ao salvar status do lote {meta.parent.name}: {type(error).__name__}", flush=True)
+        if not reset_pending():
+            WAKE.wait(3)
 
 
 def start_worker(analyze):

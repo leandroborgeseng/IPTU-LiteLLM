@@ -74,7 +74,11 @@ async function refreshProcesses() {
   if (batchList.value !== key) return;
   get('reanalisar').hidden = !['concluido', 'falha'].includes(lot.status);
   const done = lot.processos.filter((row) => row.concluido).length;
-  get('batch-status').textContent = lot.status + ' · ' + done + '/' + lot.processos.length + ' processos lidos' +
+  const progress = lot.progresso;
+  const step = {renderizando:'Renderizando', consultando_ia:'Consultando LiteLLM', nova_tentativa_ia:'Tentando novamente no LiteLLM'};
+  get('batch-status').textContent = (progress
+    ? step[progress.etapa] + ' · página ' + progress.pagina + ' de ' + progress.total_paginas
+    : lot.status) + ' · ' + done + '/' + lot.processos.length + ' processos lidos' +
     (lot.motivo ? ' · ' + lot.motivo : '');
   setOptions(processList, lot.processos, (row) => row.processo + (row.concluido ? ' · revisão' : ''), 'Selecione um processo');
 }
@@ -203,7 +207,38 @@ get('reanalisar').onclick = async () => {
 };
 get('reload').onclick = () => showProcess().catch(report);
 fileList.onchange = () => showPdf(fileList.value);
-refreshBatches().catch(report);
+const clearButton = get('limpar-lotes');
+
+async function refreshCleanup() {
+  const pending = (await request(base + '/limpeza')).pendente;
+  const wasPending = clearButton.disabled;
+  clearButton.disabled = pending;
+  if (pending) {
+    get('limpeza-status').textContent = 'Limpeza em andamento. O worker vai parar antes da próxima página.';
+    return true;
+  }
+  if (wasPending) {
+    clearProcess();
+    processList.replaceChildren();
+    get('batch-status').textContent = '';
+    get('progress').value = 0;
+    get('upload-status').textContent = 'Selecione um novo arquivo.';
+    get('limpeza-status').textContent = 'Lotes removidos.';
+    localStorage.removeItem(storageKey);
+  }
+  return false;
+}
+
+clearButton.onclick = async () => {
+  if (!window.confirm('Apagar todos os lotes, PDFs e revisões salvas no painel?')) return;
+  try {
+    await request(base + '/limpeza', {method:'POST'});
+    clearButton.disabled = true;
+    if (!await refreshCleanup()) await refreshBatches();
+  } catch (error) { report(error); }
+};
+
+refreshCleanup().then((pending) => { if (!pending) return refreshBatches(); }).catch(report);
 setInterval(async () => {
-  try { await refreshBatches(); await refreshProcesses(); } catch (error) { report(error); }
+  try { if (!await refreshCleanup()) { await refreshBatches(); await refreshProcesses(); } } catch (error) { report(error); }
 }, 4000);

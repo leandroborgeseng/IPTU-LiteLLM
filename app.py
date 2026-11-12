@@ -356,6 +356,12 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
         try:
             if parts[:2] != ["api", "lotes"]:
                 raise FileNotFoundError
+            if parts == ["api", "lotes", "limpeza"]:
+                if self.command == "POST":
+                    batch.request_reset()
+                self.send_json(202 if self.command == "POST" else 200,
+                               {"pendente": batch.reset_pending()})
+                return
             if len(parts) == 2:
                 if self.command == "GET":
                     rows = [batch.describe(p.parent) for p in batch.ROOT.glob("*/batch.json")]
@@ -364,7 +370,10 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                     data = json.loads(self.read_bounded(4096))
                     if not isinstance(data, dict):
                         raise ValueError
-                    self.send_json(201, batch.create(data.get("nome"), data.get("bytes")))
+                    with batch.LOCK:
+                        batch.check_reset()
+                        result = batch.create(data.get("nome"), data.get("bytes"))
+                    self.send_json(201, result)
                 return
             path = batch.batch_dir(parts[2])
             if self.command == "POST" and len(parts) == 4:
@@ -375,6 +384,7 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                     return
                 if parts[3] == "reanalisar":
                     with batch.LOCK:
+                        batch.check_reset()
                         result = batch.describe(path)
                         if result["status"] not in {"concluido", "falha"}:
                             self.send_json(409, {"status": "lote_ocupado"})
@@ -468,6 +478,8 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                     shutil.copyfileobj(pdf, self.wfile)
                 return
             raise FileNotFoundError
+        except batch.ResetRequested:
+            self.send_json(409, {"status": "limpeza_em_andamento"})
         except FileNotFoundError:
             self.send_json(404, {"status": "nao_encontrado"})
         except ValueError:
