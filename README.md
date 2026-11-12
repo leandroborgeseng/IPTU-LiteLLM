@@ -106,11 +106,12 @@ não grava no F4. O diagnóstico anterior continua disponível no menu.
 
 ## Parecer preliminar e número SEI
 
-O lote agrupa arquivos pelo número SEI completo quando ele aparece no nome
-do arquivo ou no caminho. A tela e o JSON guardam as origens encontradas.
-Conflitos entre arquivo e pasta exigem conferência. Use **Reanalisar lote**
-para atualizar extrações antigas. Se os arquivos de um lote antigo precisarem
-ser reagrupados pelos nomes, importe o ZIP novamente.
+Envie a pasta do processo em um ZIP. A pasta com o número SEI agrupa os PDFs,
+subpastas e ZIPs internos em um único processo. Para pastas sem número SEI,
+os PDFs são agrupados pela pasta que os contém. Os PDFs na raiz do ZIP formam
+um grupo próprio. A tela e o JSON guardam as origens encontradas. Conflitos
+entre arquivo e pasta exigem conferência no mesmo processo. Use **Reanalisar lote**
+para atualizar extrações antigas. Para aplicar o agrupamento a um lote antigo, importe o ZIP novamente.
 
 O parecer é calculado para o fluxo de aposentadoria, pensão, BPC e renda mensal
 vitalícia de Franca, exercício 2027. A IA lê os campos e comprovantes por página.

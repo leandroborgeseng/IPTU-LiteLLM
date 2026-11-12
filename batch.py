@@ -179,17 +179,28 @@ def inventory(path, name):
     processes = {}
     total = entries = 0
 
-    def add(original, file_id=None, error=None):
+    def process_group(original):
         parts = PurePosixPath(original).parts
-        numbers = sei_numbers(original)
-        external = next(iter(numbers), None) if len(numbers) == 1 else None
-        key = external or (parts[0] if len(parts) > 1 else Path(name).stem)
-        if len(numbers) > 1:
-            key = "Divergência SEI · " + " / ".join(sorted(numbers))
-        process = processes.setdefault(key, {"id": uuid.uuid4().hex, "processo": key, "arquivos": []})
+        folders = parts[:-1]
+        for index, folder in enumerate(folders):
+            if PROCESS_ID.fullmatch(folder):
+                return ("pasta", *folders[:index + 1]), folder
+        if folders:
+            return ("pasta", *folders), "/".join(folders)
+        numbers = sei_numbers(parts[-1])
+        if Path(name).suffix.lower() == ".pdf" and len(numbers) == 1:
+            return ("raiz",), next(iter(numbers))
+        label = Path(name).stem
+        return ("raiz",), label
+
+    def add(original, file_id=None, error=None, group=None):
+        key, label = group or process_group(original)
+        process = processes.setdefault(key, {
+            "id": uuid.uuid4().hex, "processo": label, "arquivos": [],
+        })
         process["arquivos"].append({"id": file_id, "origem": original, "erro": error})
 
-    def unzip(source, prefix="", depth=0):
+    def unzip(source, prefix="", depth=0, parent_group=None):
         nonlocal total, entries
         with zipfile.ZipFile(source) as archive:
             for item in archive.infolist():
@@ -199,22 +210,24 @@ def inventory(path, name):
                 entries += 1
                 if entries > MAX_ENTRIES:
                     raise ValueError("limite_de_entradas")
-                original = prefix + item.filename
-                parts = PurePosixPath(item.filename.replace(chr(92), "/"))
+                relative = item.filename.replace(chr(92), "/")
+                original = prefix + relative
+                parts = PurePosixPath(relative)
                 if parts.is_absolute() or ".." in parts.parts or len(original) > 1024:
-                    add(prefix + "[entrada inválida]", error="caminho_invalido")
+                    add(prefix + "[entrada inválida]", error="caminho_invalido", group=parent_group)
                     continue
+                group = parent_group or process_group(original)
                 suffix = parts.suffix.lower()
                 if parts.name.startswith(".") or "__MACOSX" in parts.parts:
                     continue
                 if suffix not in {".pdf", ".zip"}:
-                    add(original, error="formato_nao_processado")
+                    add(original, error="formato_nao_processado", group=group)
                     continue
                 if suffix == ".zip" and depth >= 3:
-                    add(original, error="limite_de_zips_internos")
+                    add(original, error="limite_de_zips_internos", group=group)
                     continue
                 if item.file_size > MAX_EXTRACTED - total:
-                    add(original, error="limite_de_extracao")
+                    add(original, error="limite_de_extracao", group=group)
                     continue
                 if item.file_size > shutil.disk_usage(path).free:
                     raise OSError("espaco_insuficiente")
@@ -225,12 +238,14 @@ def inventory(path, name):
                     with archive.open(item) as member:
                         total += copy_member(member, target, MAX_EXTRACTED - total)
                     if suffix == ".zip":
-                        unzip(target, original + "/", depth + 1)
+                        # An archive inside a process folder is an attachment to that process.
+                        attachment_group = group if parent_group or len(parts.parts) > 1 else None
+                        unzip(target, original + "/", depth + 1, attachment_group)
                     else:
-                        add(original, key)
+                        add(original, key, group=group)
                         retained = True
                 except (RuntimeError, zipfile.BadZipFile, NotImplementedError, ValueError) as exc:
-                    add(original, error="limite_de_entradas" if str(exc) == "limite_de_entradas" else "arquivo_inacessivel")
+                    add(original, error="limite_de_entradas" if str(exc) == "limite_de_entradas" else "arquivo_inacessivel", group=group)
                 finally:
                     if not retained:
                         target.unlink(missing_ok=True)
