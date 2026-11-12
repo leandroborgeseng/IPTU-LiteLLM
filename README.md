@@ -129,3 +129,8 @@ um trecho do próprio pedido. O inventário indica possíveis comprovantes com
 a página de origem para conferência. Use `IPTU_BATCH_MODEL` para trocar o
 modelo do processamento em lote no Coolify. Para aplicar o OCR e a nova
 classificação aos lotes antigos, use **Reanalisar lote**.
+
+O worker processa até 4 páginas do mesmo PDF em paralelo por padrão. Ajuste
+`IPTU_PAGE_WORKERS` no Coolify para testar outros limites, de 1 a 16. Meça o
+tempo e os erros do LiteLLM com o mesmo PDF antes de subir o limite. A barra
+de status exibe quantas páginas do PDF atual já têm resultado salvo.

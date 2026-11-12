@@ -76,7 +76,10 @@ async function refreshProcesses() {
   const done = lot.processos.filter((row) => row.concluido).length;
   const progress = lot.progresso;
   const step = {renderizando:'Renderizando', ocr:'Executando OCR', consultando_ia:'Consultando LiteLLM', nova_tentativa_ia:'Tentando novamente no LiteLLM'};
-  get('batch-status').textContent = (progress
+  get('batch-status').textContent = (progress?.paginas_concluidas != null
+    ? progress.paginas_concluidas + ' de ' + progress.total_paginas + ' páginas concluídas · até ' +
+      progress.paralelismo + ' em paralelo'
+    : progress
     ? step[progress.etapa] + ' · página ' + progress.pagina + ' de ' + progress.total_paginas
     : lot.status) + ' · ' + done + '/' + lot.processos.length + ' processos lidos' +
     (lot.motivo ? ' · ' + lot.motivo : '');
@@ -251,7 +254,7 @@ async function refreshCleanup() {
   const wasPending = clearButton.disabled;
   clearButton.disabled = pending;
   if (pending) {
-    get('limpeza-status').textContent = 'Limpeza em andamento. O worker vai parar antes da próxima página.';
+    get('limpeza-status').textContent = 'Limpeza em andamento. O worker vai encerrar as páginas em andamento.';
     return true;
   }
   if (wasPending) {

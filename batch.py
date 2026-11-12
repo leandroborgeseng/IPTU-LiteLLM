@@ -9,6 +9,7 @@ import time
 import unicodedata
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 from threading import Event, RLock, Thread
 
@@ -299,6 +300,35 @@ def validate_page_kind(result, texts):
             "motivo_classificacao": "Requerimento de isenção sem trecho confirmado no texto da página."}
 
 
+def page_workers():
+    try:
+        return max(1, min(16, int(os.environ.get("IPTU_PAGE_WORKERS", "4"))))
+    except ValueError:
+        return 4
+
+
+def process_page(pdf, number, evidence, analyze):
+    check_reset()
+    result = {"status": "pagina_inacessivel"}
+    texts = {}
+    try:
+        image = render_page(pdf, number)
+        if image is not None:
+            check_reset()
+            texts = page_text(pdf, number, image)
+            check_reset()
+            result = analyze(image, texts)
+            if result["status"] == "falha_de_conexao" or result.get("codigo") in {429, 502, 503, 504}:
+                time.sleep(1)
+                check_reset()
+                result = analyze(image, texts)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    check_reset()
+    result = validate_page_kind(result, texts)
+    save(evidence, {**result, **texts, "versao_extracao": PAGE_SCHEMA})
+
+
 def process_batch(path, analyze):
     state = load(path / "batch.json")
     check_reset()
@@ -329,6 +359,7 @@ def process_batch(path, analyze):
                     count = 0
                 save(count_path, {"paginas": min(count, 1000), "total": count})
             count = load(count_path)["paginas"]
+            pending = []
             for number in range(1, count + 1):
                 check_reset()
                 evidence = folder / f"{key}-{number}.json"
@@ -338,32 +369,23 @@ def process_batch(path, analyze):
                         and previous.get("status") == "extraido"
                         and previous.get("status_ocr") != "falha_ocr"):
                         continue
-                state["progresso"] = {"pagina": number, "total_paginas": count, "etapa": "renderizando"}
+                pending.append((number, evidence))
+            workers = min(page_workers(), len(pending))
+            if workers:
+                progress = {"paginas_concluidas": count - len(pending),
+                            "total_paginas": count, "paralelismo": workers}
+                state["progresso"] = progress
                 save(path / "batch.json", state)
-                result = {"status": "pagina_inacessivel"}
-                texts = {}
+                pool = ThreadPoolExecutor(max_workers=workers)
                 try:
-                    image = render_page(pdf, number)
-                    if image is not None:
-                        check_reset()
-                        state["progresso"]["etapa"] = "ocr"
+                    jobs = [pool.submit(process_page, pdf, number, evidence, analyze)
+                            for number, evidence in pending]
+                    for job in as_completed(jobs):
+                        job.result()
+                        progress["paginas_concluidas"] += 1
                         save(path / "batch.json", state)
-                        texts = page_text(pdf, number, image)
-                        check_reset()
-                        state["progresso"]["etapa"] = "consultando_ia"
-                        save(path / "batch.json", state)
-                        result = analyze(image, texts)
-                        if result["status"] == "falha_de_conexao" or result.get("codigo") in {429, 502, 503, 504}:
-                            check_reset()
-                            state["progresso"]["etapa"] = "nova_tentativa_ia"
-                            save(path / "batch.json", state)
-                            time.sleep(1)
-                            result = analyze(image, texts)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
-                check_reset()
-                result = validate_page_kind(result, texts)
-                save(evidence, {**result, **texts, "versao_extracao": PAGE_SCHEMA})
+                finally:
+                    pool.shutdown(wait=True, cancel_futures=True)
         save(folder / "complete.json", {"concluido": True})
     state.pop("progresso", None)
     state["status"] = "concluido"
