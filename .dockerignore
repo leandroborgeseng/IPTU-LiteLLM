@@ -1,5 +1,7 @@
 *
 !app.py
-
+!batch.py
+!lotes.html
+!lotes.js
 !fixtures/
 !fixtures/*.png

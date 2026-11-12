@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IPTU Franca · Conferência documental</title>
+<style>
+:root { font: 16px system-ui; color: #142438; background: #f3f6fa; }
+body { margin: 0; }
+header, main { max-width: 1250px; margin: auto; padding: 1.3rem; }
+header { display: flex; gap: 1rem; align-items: center; justify-content: space-between; }
+h1, h2, h3 { margin-top: 0; }
+section { background: white; border: 1px solid #d7e1ec; border-radius: .65rem; padding: 1rem; margin-bottom: 1rem; }
+button, input, select, textarea { font: inherit; }
+button { background: #164c85; color: white; border: 0; border-radius: .35rem; padding: .5rem .8rem; cursor: pointer; }
+button:disabled { opacity: .6; cursor: wait; }
+progress { width: 100%; }
+#review { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+#viewer:not([hidden]) { display: block; max-width: 100%; max-height: 75vh; object-fit: contain; margin-top: .5rem; border: 1px solid #d7e1ec; }
+textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; }
+li { margin: .35rem 0; overflow-wrap: anywhere; }
+small { color: #42546b; }
+#processes, #files { max-width: 100%; }
+@media (max-width: 760px) { #review { grid-template-columns: 1fr; } header { align-items: start; flex-direction: column; } }
+</style>
+<header><div><h1>Conferência de IPTU</h1><small>Importação e revisão documental</small></div><a href="/diagnostico">Diagnóstico LiteLLM</a></header>
+<main>
+<section>
+<h2>Importar lote</h2>
+<form id="upload"><input id="upload-file" type="file" accept=".pdf,.zip" required><button>Enviar e processar</button></form>
+<p id="upload-status" role="status">Use PDFs ou ZIPs sintéticos ou anonimizados neste piloto.</p>
+<progress id="progress" max="1" value="0"></progress>
+</section>
+<section>
+<h2>Lotes</h2>
+<label>Lote <select id="batches"></select></label>
+<p id="batch-status" role="status"></p>
+<label>Processo <select id="processes"></select></label> <button id="reload" type="button">Atualizar processo</button>
+</section>
+<div id="review">
+<section>
+<h2>Documento original</h2>
+<label>PDF <select id="files"></select></label>
+<p><a id="original" hidden>Baixar PDF original</a></p>
+<img id="viewer" alt="Página do PDF original" hidden>
+</section>
+<section>
+<h2>Conferência</h2>
+<p id="process-status" role="status">Selecione um processo.</p>
+<ul id="issues"></ul>
+<h3>Páginas e campos</h3>
+<ul id="pages"></ul>
+<form id="notes" hidden>
+<label>Nota de revisão <textarea id="note" maxlength="2000" required></textarea></label>
+<button>Salvar revisão</button>
+</form>
+<p id="note-status" role="status"></p>
+</section>
+</div>
+</main>
+<script src="/lotes.js" defer></script>
+</html>

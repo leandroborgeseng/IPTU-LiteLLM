@@ -80,3 +80,26 @@ imagem ao LiteLLM. A resposta informa a página, o modelo e os valores extraído
 O resultado preserva `null` quando a caixa não pode ser determinada. Esse teste
 não faz validação cadastral, não classifica o processo e não grava parecer.
 A inferência usa o alias Gemma já verificado no teste sintético.
+
+## Piloto de lotes e conferência
+
+A página inicial recebe um PDF ou ZIP sintético ou anonimizado. Envie arquivos
+pequenos primeiro. O upload é dividido em partes de até 8 MiB e pode ser
+retomado selecionando o mesmo arquivo no mesmo navegador. O servidor persiste
+o original, os PDFs extraídos e os resultados no volume Docker `iptu_data`.
+Não remova esse volume entre implantações. Os limites atuais são 48 GiB
+compactados e 150 GiB de extração acumulada. A capacidade para um lote de
+40 GB depende de teste de disco, proxy e carga no ambiente de destino.
+
+O processamento continua em segundo plano. O importador agrupa os documentos
+pela pasta de processo, lê ZIPs internos até o limite configurado no código
+e registra formatos que não processa, incluindo HTML. O worker percorre as
+páginas com o modelo padrão Gemma via LiteLLM e salva um resultado por página.
+Ao reiniciar, retoma as páginas que ainda não têm resultado salvo. Neste
+piloto, resultados de falha ficam visíveis para revisão após uma tentativa
+adicional nas falhas transitórias de transporte. Use uma única réplica.
+
+Na tela de conferência, selecione o lote, o processo e uma página. A imagem
+da página aparece ao lado dos campos extraídos. A nota de conferência é
+persistida. Este piloto não consulta a SIL, não verifica elegibilidade e
+não grava no F4. O diagnóstico anterior continua disponível no menu.

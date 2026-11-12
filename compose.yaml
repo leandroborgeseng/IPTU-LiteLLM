@@ -14,6 +14,8 @@ services:
       timeout: 4s
       retries: 3
     read_only: true
+    volumes:
+      - iptu_data:/data
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
     cap_drop:
@@ -21,3 +23,6 @@ services:
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
+
+volumes:
+  iptu_data:
