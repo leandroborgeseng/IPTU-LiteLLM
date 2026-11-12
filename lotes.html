@@ -2,84 +2,186 @@
 <html lang="pt-BR">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPTU Franca · Conferência documental</title>
+<title>Isenção de IPTU · Franca</title>
 <style>
-:root { font: 16px system-ui; color: #142438; background: #f3f6fa; }
+:root {
+  --ink: #15202e; --muted: #5b6878; --line: #e3e8ef; --bg: #f6f8fb; --card: #fff;
+  --brand: #1d4f8c; --ok: #12784a; --ok-bg: #e5f5ec; --no: #b42318; --no-bg: #fdecea;
+  --wait: #9a6100; --wait-bg: #fff4dc; --idle: #5b6878; --idle-bg: #eef1f5;
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg);
+}
+* { box-sizing: border-box; }
 body { margin: 0; }
-header, main { max-width: 1250px; margin: auto; padding: 1.3rem; }
-header { display: flex; gap: 1rem; align-items: center; justify-content: space-between; }
-h1, h2, h3 { margin-top: 0; }
-section { background: white; border: 1px solid #d7e1ec; border-radius: .65rem; padding: 1rem; margin-bottom: 1rem; }
-button, input, select, textarea { font: inherit; }
-button { background: #164c85; color: white; border: 0; border-radius: .35rem; padding: .5rem .8rem; cursor: pointer; }
-button:disabled { opacity: .6; cursor: wait; }
-progress { width: 100%; }
-#review { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-#viewer:not([hidden]) { display: block; max-width: 100%; max-height: 75vh; object-fit: contain; margin-top: .5rem; border: 1px solid #d7e1ec; }
-textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; }
-li { margin: .35rem 0; overflow-wrap: anywhere; }
-small { color: #42546b; }
-#processes, #files { max-width: 100%; }
-@media (max-width: 760px) { #review { grid-template-columns: 1fr; } header { align-items: start; flex-direction: column; } }
+header { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .9rem 1.5rem; background: var(--card); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 1.05rem; margin: 0; }
+header small { color: var(--muted); }
+header nav { display: flex; gap: .75rem; align-items: center; font-size: .9rem; }
+main { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+a { color: var(--brand); }
+button { font: inherit; cursor: pointer; border-radius: .5rem; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink); padding: .45rem .8rem; }
+button.primary { background: var(--brand); border-color: var(--brand); color: #fff; padding: .7rem 1.3rem; font-weight: 600; }
+button.link { border: 0; background: none; color: var(--brand); padding: 0; }
+button:disabled { opacity: .55; cursor: default; }
+select, input, textarea { font: inherit; border: 1px solid var(--line); border-radius: .45rem; padding: .4rem .5rem; background: #fff; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: .8rem; padding: 1.25rem; margin-bottom: 1rem; }
+#drop { text-align: center; padding: 2.5rem 1rem; border: 2px dashed #c7d2e0; border-radius: .9rem;
+  background: var(--card); transition: border-color .15s, background .15s; }
+#drop.over { border-color: var(--brand); background: #eef4fb; }
+#drop h2 { margin: .2rem 0 .3rem; font-size: 1.3rem; }
+#drop p { color: var(--muted); margin: .2rem 0 1.1rem; }
+#drop .alt { margin-top: .8rem; font-size: .9rem; color: var(--muted); }
+#job { display: none; }
+#job.on { display: block; }
+.steps { display: flex; gap: .4rem; margin: .2rem 0 .8rem; flex-wrap: wrap; }
+.steps span { font-size: .82rem; padding: .2rem .6rem; border-radius: 999px; background: var(--idle-bg); color: var(--muted); }
+.steps span.done { background: var(--ok-bg); color: var(--ok); }
+.steps span.now { background: var(--brand); color: #fff; }
+progress { width: 100%; height: .5rem; accent-color: var(--brand); }
+#job-text { color: var(--muted); font-size: .9rem; margin: .4rem 0 0; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: .8rem; }
+.counts { display: flex; gap: .5rem; flex-wrap: wrap; }
+.badge { display: inline-block; font-size: .8rem; font-weight: 600; padding: .15rem .6rem; border-radius: 999px; white-space: nowrap; }
+.r-enquadra, .r-enquadra_conferir_cadastro { background: var(--ok-bg); color: var(--ok); }
+.r-nao_enquadra { background: var(--no-bg); color: var(--no); }
+.r-em_analise { background: var(--wait-bg); color: var(--wait); }
+.r-processando, .r-erro { background: var(--idle-bg); color: var(--idle); }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); font-weight: 600; }
+th, td { padding: .6rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: #f8fafc; }
+td .why { color: var(--muted); font-size: .85rem; }
+.empty { color: var(--muted); text-align: center; padding: 1.5rem; }
+/* Detalhe */
+#detail { position: fixed; inset: 0; background: rgba(15, 25, 40, .35); display: none; z-index: 10; }
+#detail.on { display: block; }
+#panel { position: absolute; top: 0; right: 0; bottom: 0; width: min(1150px, 100%); background: var(--bg);
+  overflow: auto; box-shadow: -8px 0 30px rgba(0,0,0,.15); }
+#panel header { position: sticky; top: 0; z-index: 1; }
+#panel .body { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 1rem; padding: 1rem 1.5rem; }
+#panel h3 { margin: 0 0 .6rem; font-size: 1rem; }
+.crit { list-style: none; padding: 0; margin: 0; }
+.crit li { display: grid; grid-template-columns: 1.4rem 1fr; gap: .4rem; padding: .5rem 0; border-bottom: 1px solid var(--line); }
+.crit li:last-child { border: 0; }
+.crit .ic { font-weight: 700; text-align: center; }
+.crit .atendido .ic { color: var(--ok); } .crit .impedimento .ic { color: var(--no); }
+.crit .pendente .ic { color: var(--wait); } .crit .cadastral .ic, .crit .aviso .ic { color: var(--idle); }
+.crit strong { display: block; font-size: .9rem; }
+.crit span.m { font-size: .88rem; color: #334155; }
+.pages { display: inline-flex; gap: .3rem; flex-wrap: wrap; margin-left: .3rem; }
+.pages button { font-size: .78rem; padding: .05rem .45rem; }
+#opinion { white-space: pre-wrap; font: .85rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #fff; border: 1px solid var(--line); border-radius: .5rem; padding: .8rem; max-height: 22rem; overflow: auto; margin: 0; }
+#viewer-box { position: sticky; top: 4.2rem; }
+#viewer { width: 100%; border: 1px solid var(--line); border-radius: .5rem; background: #fff; min-height: 10rem; }
+#viewer-bar { display: flex; gap: .5rem; align-items: center; margin-bottom: .5rem; flex-wrap: wrap; }
+#viewer-bar select { max-width: 100%; flex: 1; }
+details { margin-top: .6rem; }
+summary { cursor: pointer; color: var(--brand); }
+#notes label { display: block; margin: .45rem 0; font-size: .88rem; }
+#notes input, #notes textarea { width: 100%; }
+#page-list { font-size: .85rem; padding-left: 1rem; }
+#page-list li { margin: .3rem 0; }
+footer { text-align: center; color: var(--muted); font-size: .8rem; padding: 1rem; }
+footer button { font-size: .8rem; }
+@media (max-width: 860px) { #panel .body { grid-template-columns: 1fr; } #viewer-box { position: static; } }
 </style>
-<header><div><h1>Conferência de IPTU</h1><small>Importação e revisão documental</small></div><a href="/diagnostico">Diagnóstico LiteLLM</a></header>
+
+<header>
+  <div><h1>Isenção de IPTU 2027</h1><small>Conferência automática de processos · LC 456/2025</small></div>
+  <nav>
+    <label>Lote <select id="batches"><option value="">—</option></select></label>
+    <a href="/diagnostico">Diagnóstico</a>
+  </nav>
+</header>
+
 <main>
-<section>
-<h2>Importar lote</h2>
-<form id="upload"><input id="upload-file" type="file" accept=".pdf,.zip,.jpg,.jpeg,.png,.webp" required><button>Enviar e processar</button></form>
-<p id="upload-status" role="status">Use PDFs, fotos ou ZIPs sintéticos ou anonimizados neste piloto.</p>
-<progress id="progress" max="1" value="0"></progress>
-</section>
-<section>
-<h2>Lotes</h2>
-<button id="limpar-lotes" type="button">Limpar todos os lotes</button>
-<p id="limpeza-status" role="status"></p>
-<label>Lote <select id="batches"></select></label>
-<p id="batch-status" role="status"></p>
-<p id="batch-performance"></p>
-<button id="reanalisar" type="button" hidden>Reanalisar lote</button>
-<label>Processo <select id="processes"></select></label> <button id="reload" type="button">Atualizar processo</button>
-</section>
-<div id="review">
-<section>
-<h2>Documento original</h2>
-<label>Arquivo <select id="files"></select></label>
-<p><a id="original" hidden>Baixar arquivo original</a></p>
-<img id="viewer" alt="Página do documento original" hidden>
-</section>
-<section>
-<h2>Conferência</h2>
-<p id="process-status" role="status">Selecione um processo.</p>
-<div id="parecer" hidden>
-<h3>Parecer preliminar</h3>
-<p id="parecer-status"></p>
-<ul id="criterios"></ul>
-<h3>Possíveis comprovantes</h3>
-<ul id="comprovantes"></ul>
-<a id="parecer-json" download="parecer-iptu.json">Baixar JSON do parecer</a>
-</div>
-<ul id="issues"></ul>
-<h3>Páginas e campos</h3>
-<ul id="pages"></ul>
-<form id="notes" hidden>
-<details>
-<summary>Registrar evidências conferidas</summary>
-<p>Preencha os critérios que você conferiu com o documento, página ou referência cadastral.</p>
-<label>Identidade e composição familiar <input name="identidade" maxlength="500"></label><br>
-<label>Titularidade do benefício <input name="beneficio" maxlength="500"></label><br>
-<label>Vínculo e imóvel único no cadastro <input name="imovel" maxlength="500"></label><br>
-<label>Residência no imóvel <input name="residencia" maxlength="500"></label><br>
-<label>Edícula e uso <input name="edícula" maxlength="500"></label><br>
-<label>Data oficial e prazo <input name="prazo" maxlength="500"></label><br>
-<label>Renda bruta familiar mensal em reais <input name="renda" inputmode="decimal" placeholder="3242,00"></label><br>
-<label>Fonte e competência da renda <input name="fonte_renda" maxlength="500"></label>
-</details>
-<label>Nota de revisão <textarea id="note" maxlength="2000" required></textarea></label>
-<button>Salvar revisão</button>
-</form>
-<p id="note-status" role="status"></p>
-</section>
-</div>
+  <section id="drop">
+    <h2>Arraste a pasta dos processos aqui</h2>
+    <p>Pode ser a pasta de um processo ou uma pasta com vários processos (uma subpasta por processo).</p>
+    <button class="primary" id="pick-folder" type="button">Selecionar pasta</button>
+    <div class="alt">ou <button class="link" id="pick-file" type="button">enviar um arquivo PDF, ZIP ou foto</button></div>
+    <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
+    <input id="file-input" type="file" accept=".pdf,.zip,.jpg,.jpeg,.png,.webp" hidden>
+  </section>
+
+  <section class="card" id="job" aria-live="polite">
+    <div class="steps"><span data-step="preparar">Preparar</span><span data-step="enviar">Enviar</span>
+      <span data-step="ler">Ler documentos</span><span data-step="pronto">Pareceres prontos</span></div>
+    <progress id="progress" max="1" value="0"></progress>
+    <p id="job-text"></p>
+  </section>
+
+  <section class="card">
+    <div class="toolbar">
+      <div class="counts" id="counts"></div>
+      <div><a id="csv" hidden>Exportar planilha (CSV)</a></div>
+    </div>
+    <table>
+      <thead><tr><th>Processo</th><th>Requerente</th><th>Resultado</th><th>Motivo principal</th></tr></thead>
+      <tbody id="rows"><tr><td class="empty" colspan="4">Selecione uma pasta para começar.</td></tr></tbody>
+    </table>
+  </section>
+
+  <footer>
+    <button id="reanalisar" type="button" hidden>Reanalisar lote</button>
+    <button id="limpar" type="button">Apagar todos os lotes</button>
+    <span id="footer-status"></span>
+  </footer>
 </main>
+
+<div id="detail" role="dialog" aria-modal="true" aria-labelledby="d-title">
+  <div id="panel">
+    <header>
+      <div><h1 id="d-title">Processo</h1><small id="d-sub"></small></div>
+      <nav><span id="d-badge" class="badge"></span><button id="close" type="button">Fechar</button></nav>
+    </header>
+    <div class="body">
+      <div>
+        <section class="card">
+          <h3>Requisitos</h3>
+          <ul class="crit" id="criteria"></ul>
+        </section>
+        <section class="card">
+          <div class="toolbar" style="margin:0 0 .5rem"><h3 style="margin:0">Parecer</h3>
+            <div><button id="copy" type="button">Copiar</button> <a id="json" download="parecer-iptu.json">JSON</a></div></div>
+          <pre id="opinion"></pre>
+        </section>
+        <section class="card">
+          <details>
+            <summary>Conferência manual</summary>
+            <form id="notes">
+              <p class="why">Preencha somente o que você conferiu. A conferência substitui a análise automática do item.</p>
+              <label>Identidade e composição familiar <input name="identidade" maxlength="500"></label>
+              <label>Titularidade do benefício <input name="beneficio" maxlength="500"></label>
+              <label>Vínculo e imóvel único no cadastro <input name="imovel" maxlength="500"></label>
+              <label>Cadastro mobiliário (SIL) <input name="mobiliario" maxlength="500"></label>
+              <label>Residência no imóvel <input name="residencia" maxlength="500"></label>
+              <label>Edícula e uso <input name="edícula" maxlength="500"></label>
+              <label>Data oficial e prazo <input name="prazo" maxlength="500"></label>
+              <label>Renda bruta familiar mensal (R$) <input name="renda" inputmode="decimal" placeholder="3242,00"></label>
+              <label>Fonte e competência da renda <input name="fonte_renda" maxlength="500"></label>
+              <label>Nota de revisão <textarea name="nota" id="note" rows="3" maxlength="2000" required></textarea></label>
+              <button class="primary" type="submit">Salvar conferência</button> <span id="note-status"></span>
+            </form>
+          </details>
+          <details>
+            <summary>Páginas lidas</summary>
+            <ol id="page-list"></ol>
+          </details>
+        </section>
+      </div>
+      <div id="viewer-box">
+        <section class="card">
+          <div id="viewer-bar"><select id="files"></select><span id="page-label"></span>
+            <a id="original" hidden>Baixar</a></div>
+          <img id="viewer" alt="Página do documento">
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
 <script src="/lotes.js" defer></script>
 </html>

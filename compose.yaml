@@ -5,8 +5,13 @@ services:
       LITELLM_BASE_URL: ${LITELLM_BASE_URL:?Defina a URL do LiteLLM}
       LITELLM_API_KEY: ${LITELLM_API_KEY:?Configure a chave do LiteLLM}
       IPTU_RUN_WORKER: ${IPTU_RUN_WORKER:-1}
-      IPTU_PAGE_WORKERS: ${IPTU_PAGE_WORKERS:-8}
+      IPTU_PAGE_WORKERS: ${IPTU_PAGE_WORKERS:-16}
       IPTU_BATCH_MODEL: ${IPTU_BATCH_MODEL:-qwen3.8-27b-fast}
+      IPTU_BATCH_MODEL_FALLBACK: ${IPTU_BATCH_MODEL_FALLBACK:-}
+      SIL_BASE_URL: ${SIL_BASE_URL:-https://interface-sandbox.siltecnologia.com.br/v1}
+      SIL_CLIENT_ID: ${SIL_CLIENT_ID:-}
+      SIL_CLIENT_SECRET: ${SIL_CLIENT_SECRET:-}
+      SIL_SCOPE: ${SIL_SCOPE:-pmfranca}
       IPTU_ADMIN_USER: ${IPTU_ADMIN_USER:-iptu}
       IPTU_ADMIN_PASSWORD: ${IPTU_ADMIN_PASSWORD:?Configure a senha do painel}
     expose:

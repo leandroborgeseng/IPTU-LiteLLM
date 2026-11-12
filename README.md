@@ -1,4 +1,51 @@
-# IPTU de Franca · Diagnóstico do LiteLLM
+# IPTU de Franca · Conferência automática de isenção
+
+## Uso
+
+Abra o painel, clique em **Selecionar pasta** (ou arraste a pasta) e aguarde.
+A pasta pode ser de um processo ou conter várias subpastas, uma por processo.
+O navegador monta um ZIP sem compressão sob demanda (sem carregar os arquivos
+na memória) e o envia em partes retomáveis. O servidor separa os processos
+pelas pastas (o número SEI no nome da pasta identifica o processo), lê todas
+as páginas de todos os processos numa única fila paralela
+(`IPTU_PAGE_WORKERS`, padrão 16) e publica o parecer de cada processo assim
+que suas páginas terminam. A tabela mostra o resultado de cada processo e
+exporta CSV; o detalhe mostra requisitos, páginas de origem e o texto do
+parecer de deferimento ou indeferimento.
+
+Resultados: **Enquadra**, **Enquadra · conferir cadastro** (documentos
+atendem; falta o que só o cadastro confirma), **Não enquadra** (condição de
+indeferimento da LC 456/2025 comprovada) e **Em análise** (os documentos não
+permitem decidir). Cada critério cita as páginas usadas.
+
+Cruzamentos automáticos: CPF/nome do requerimento × documento de identidade;
+benefícios declarados × extratos (número do benefício); soma da renda do
+requerente e do cônjuge na competência mais recente, sem duplicar
+comprovantes e sem rendas de terceiros, com teto inclusivo de 2 salários
+mínimos; residência e edícula pelas respostas do requerimento; testamento,
+escritura ou matrícula citando o requerente; e, com a SIL configurada,
+titularidade e endereço do imóvel pela inscrição e inscrição mobiliária
+pelo CPF. A API da SIL ainda não consulta imóveis por CPF, por isso a
+unicidade do imóvel continua como conferência cadastral.
+
+### SIL
+
+Configure `SIL_BASE_URL`, `SIL_CLIENT_ID`, `SIL_CLIENT_SECRET` e `SIL_SCOPE`
+apenas no ambiente (Coolify), nunca no repositório. Teste com
+`python app.py sil` no terminal do container. O resultado da consulta fica
+em cache por processo por 24 h.
+
+### Modelo
+
+`IPTU_BATCH_MODEL` define o modelo multimodal. `IPTU_BATCH_MODEL_FALLBACK`
+(opcional) é usado uma vez quando a resposta do principal vem fora do
+esquema. Após trocar o modelo ou atualizar o sistema, use **Reanalisar lote**.
+
+### Testes
+
+`python -m unittest discover -s tests` cobre as regras do parecer.
+
+## Diagnóstico do LiteLLM
 
 Painel de teste com login, pronto para publicar via Docker Compose no Coolify. Consulta `GET /v1/models` de dentro do container. A chave do LiteLLM fica no backend. O painel ainda não recebe processos nem faz OCR.
 
@@ -117,8 +164,22 @@ O parecer é calculado para o fluxo de aposentadoria, pensão, BPC e renda mensa
 vitalícia de Franca, exercício 2027. A IA lê os campos e comprovantes por página.
 A tela permite registrar evidências humanas e exportar o JSON com critérios,
 motivos e páginas. Use o total bruto familiar mensal conferido, sem somar
-automaticamente comprovantes duplicados, valores de meses diferentes ou
-rendimentos de terceiros. O teto de R$ 3.242,00 é o publicado pela Prefeitura
+comprovantes duplicados, valores de meses diferentes ou rendimentos de terceiros.
+Como apoio, o parecer mostra a soma dos benefícios distintos do requerente na
+competência mais recente (deduplicados pelo número do benefício) em
+`renda_calculada_comprovantes_centavos`. Essa soma não substitui a conferência:
+a renda do cônjuge e outras rendas entram no total registrado pelo operador.
+O teto é inclusivo (renda menor ou igual a 2 salários mínimos), conforme a
+especificação do motor de regras da LC 456/2025.
+
+Residência e edícula usam as respostas do requerimento, como prevê a
+especificação: "Reside no imóvel: Sim" atende a residência; edícula ausente,
+sem moradores ou habitada por ascendente/descendente sem aluguel atende a
+edícula; edícula alugada ou ponto comercial gera proposta de indeferimento.
+A conferência de endereço e de unicidade do imóvel no cadastro continua com o
+operador. Pedidos de aposentada e pensionista ao mesmo tempo são aceitos.
+Os campos novos (edícula habitada, ocupante familiar, usufrutuário, ponto
+comercial e número do benefício) exigem **Reanalisar lote** nos lotes antigos. O teto de R$ 3.242,00 é o publicado pela Prefeitura
 para o período de solicitação em 2026. Casos sociais ficam em análise.
 As confirmações cadastrais são registradas pelo operador. A consulta automática
 à SIL e a decisão oficial no SEI/F4 ainda estão fora desta entrega.

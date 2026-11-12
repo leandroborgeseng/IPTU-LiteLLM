@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from threading import Event, RLock, Thread
 
 import parecer
+import sil
 
 from PIL import Image, ImageOps
 
@@ -41,8 +42,21 @@ ASSESSMENT_FIELDS = {
     "possui_edicula": bool, "edicula_alugada": bool, "edicula_uso_comercial": bool,
     "vinculo_imovel": str, "renda_bruta_centavos": int, "competencia_renda": str,
     "titular_renda": str, "atividade_economica_declarada": bool,
+    "numero_beneficio": str, "especie_beneficio": str, "usufrutuario": bool,
+    "imovel_ponto_comercial": bool, "edicula_habitada": bool,
+    "edicula_ocupante_familiar": bool, "possui_outro_imovel": bool,
+    "estado_civil": str, "nome_conjuge": str, "conjuge_informado": bool,
+    "conjuge_renda_centavos": int, "outras_rendas": bool, "outras_rendas_centavos": int,
+    "renda_atividade_centavos": int, "trabalha_registrado": bool, "data_requerimento": str,
+    "beneficio_aposentadoria_numero": str, "beneficio_aposentadoria_centavos": int,
+    "beneficio_pensao_numero": str, "beneficio_pensao_centavos": int,
+    "beneficio_bpc_numero": str, "beneficio_bpc_centavos": int,
+    "nome_documento": str, "cpf_documento": str,
 }
-PAGE_SCHEMA = 4
+INCOME_FIELDS = {"renda_bruta_centavos", "competencia_renda", "titular_renda",
+                 "numero_beneficio", "especie_beneficio"}
+ID_FIELDS = {"nome_documento", "cpf_documento"}
+PAGE_SCHEMA = 6
 
 
 class ResetRequested(Exception):
@@ -183,6 +197,7 @@ def inventory(path, name):
         partial.unlink()
     upload = path / "upload"
     processes = {}
+    document_dirs = set()
     total = entries = 0
 
     def process_group(original):
@@ -192,6 +207,11 @@ def inventory(path, name):
             if PROCESS_ID.fullmatch(folder):
                 return ("pasta", *folders[:index + 1]), folder
         if folders:
+            # Subpastas (ex.: "anexos") pertencem à pasta de processo que já contém documentos.
+            for size in range(2, len(folders)):
+                if folders[:size] in document_dirs:
+                    folders = folders[:size]
+                    break
             return ("pasta", *folders), "/".join(folders)
         numbers = sei_numbers(parts[-1])
         if Path(name).suffix.lower() in DOCUMENT_EXTENSIONS and len(numbers) == 1:
@@ -261,6 +281,11 @@ def inventory(path, name):
         os.link(upload, files / key)
         add(name, key)
     else:
+        with zipfile.ZipFile(upload) as archive:
+            document_dirs.update(
+                PurePosixPath(item.filename.replace(chr(92), "/")).parts[:-1]
+                for item in archive.infolist()
+                if not item.is_dir() and PurePosixPath(item.filename).suffix.lower() in DOCUMENT_EXTENSIONS)
         unzip(upload)
     return list(processes.values())
 
@@ -337,15 +362,16 @@ def validate_page_kind(result, texts):
         quote in normalize_text(texts.get(key, "")) for key in ("texto_ocr", "texto_pdf")
     )):
         return {**result, "requerimento_isencao_confirmado": True}
-    return {**result, "tipo": "outro", "obtido": {},
+    return {**result, "tipo": "outro", "obtido": {}, "tipo_sugerido": "requerimento",
+            "obtido_nao_confirmado": result.get("obtido", {}),
             "motivo_classificacao": "Requerimento de isenção sem trecho confirmado no texto da página."}
 
 
 def page_workers():
     try:
-        return max(1, min(16, int(os.environ.get("IPTU_PAGE_WORKERS", "8"))))
+        return max(1, min(64, int(os.environ.get("IPTU_PAGE_WORKERS", "16"))))
     except ValueError:
-        return 8
+        return 16
 
 
 def process_page(pdf, number, evidence, analyze, extension=".pdf"):
@@ -408,9 +434,15 @@ def process_batch(path, analyze):
     if not manifest.exists():
         save(manifest, inventory(path, state["nome"]))
     processes = load(manifest)
+    # 1) Conta as páginas de todos os documentos. 2) Uma única fila paralela atende
+    # todos os processos do lote, na ordem dos processos; cada processo é marcado
+    # como concluído assim que suas páginas terminam, e o parecer já fica disponível.
+    jobs_by_process = {}
+    total_pages = 0
     for process in processes:
         folder = path / process["id"]
         folder.mkdir(exist_ok=True)
+        pending = []
         for file in process["arquivos"]:
             check_reset()
             if not file["id"]:
@@ -431,9 +463,8 @@ def process_batch(path, analyze):
                     count = 0
                 save(count_path, {"paginas": min(count, 1000), "total": count})
             count = load(count_path)["paginas"]
-            pending = []
+            total_pages += count
             for number in range(1, count + 1):
-                check_reset()
                 evidence = folder / f"{key}-{number}.json"
                 if evidence.exists():
                     previous = load(evidence)
@@ -443,33 +474,42 @@ def process_batch(path, analyze):
                         and (os.environ.get("IPTU_CACHE_PREVIEWS") != "1"
                              or (path / "previews" / (evidence.stem + ".png")).is_file())):
                         continue
-                pending.append((number, evidence))
-            workers = min(page_workers(), len(pending))
-            if workers:
-                progress = {"paginas_concluidas": count - len(pending),
-                            "total_paginas": count, "paralelismo": workers}
-                state["progresso"] = progress
+                pending.append((pdf, number, evidence, extension))
+        jobs_by_process[process["id"]] = pending
+        if not pending:
+            save(folder / "complete.json", {"concluido": True})
+    remaining = {key: len(items) for key, items in jobs_by_process.items()}
+    queued = sum(remaining.values())
+    workers = min(page_workers(), queued)
+    if workers:
+        progress = {"paginas_concluidas": total_pages - queued, "total_paginas": total_pages,
+                    "paralelismo": workers}
+        state["progresso"] = progress
+        save(path / "batch.json", state)
+        pool = ThreadPoolExecutor(max_workers=workers)
+        try:
+            jobs = {pool.submit(process_page, pdf, number, evidence, analyze, extension): key
+                    for key, items in jobs_by_process.items()
+                    for pdf, number, evidence, extension in items}
+            for job in as_completed(jobs):
+                timing, attempts, failed = job.result()
+                performance = state["desempenho"]
+                performance["paginas_processadas"] += 1
+                performance["paginas_com_falha"] += int(failed)
+                performance["novas_tentativas"] += max(0, attempts - 1)
+                performance["duracao_ms"] = round((time.monotonic() - batch_started) * 1000)
+                for stage, duration in timing.items():
+                    stats = performance["etapas"].setdefault(stage, {"soma_ms": 0, "paginas": 0})
+                    stats["soma_ms"] += duration
+                    stats["paginas"] += 1
+                progress["paginas_concluidas"] += 1
+                key = jobs[job]
+                remaining[key] -= 1
+                if not remaining[key]:
+                    save(path / key / "complete.json", {"concluido": True})
                 save(path / "batch.json", state)
-                pool = ThreadPoolExecutor(max_workers=workers)
-                try:
-                    jobs = [pool.submit(process_page, pdf, number, evidence, analyze, extension)
-                            for number, evidence in pending]
-                    for job in as_completed(jobs):
-                        timing, attempts, failed = job.result()
-                        performance = state["desempenho"]
-                        performance["paginas_processadas"] += 1
-                        performance["paginas_com_falha"] += int(failed)
-                        performance["novas_tentativas"] += max(0, attempts - 1)
-                        performance["duracao_ms"] = round((time.monotonic() - batch_started) * 1000)
-                        for stage, duration in timing.items():
-                            stats = performance["etapas"].setdefault(stage, {"soma_ms": 0, "paginas": 0})
-                            stats["soma_ms"] += duration
-                            stats["paginas"] += 1
-                        progress["paginas_concluidas"] += 1
-                        save(path / "batch.json", state)
-                finally:
-                    pool.shutdown(wait=True, cancel_futures=True)
-        save(folder / "complete.json", {"concluido": True})
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
     state.pop("progresso", None)
     state["status"] = "concluido"
     state["desempenho"]["duracao_ms"] = round((time.monotonic() - batch_started) * 1000)
@@ -559,6 +599,16 @@ def process_detail(path, process_id):
             documents.append(row)
             if result.get("requerimento_isencao_confirmado"):
                 candidates.append(row)
+    # A página seguinte de um requerimento confirmado (cônjuge, assinatura) faz parte dele.
+    confirmed = {(row["arquivo"], row["pagina"]) for row in candidates}
+    for row in documents:
+        if (row.get("tipo_sugerido") == "requerimento"
+                and (row["arquivo"], row["pagina"] - 1) in confirmed):
+            row.update(tipo="requerimento", obtido=row.get("obtido_nao_confirmado", {}),
+                       continuacao_requerimento=True)
+            row.pop("motivo_classificacao", None)
+            candidates.append(row)
+            confirmed.add((row["arquivo"], row["pagina"]))
     process["paginas"] = documents
     process["requerimentos"] = candidates
     process["status"] = "em_revisao" if (folder / "complete.json").exists() else "processando"
@@ -570,5 +620,55 @@ def process_detail(path, process_id):
     review = folder / "review.json"
     process["revisao"] = load(review) if review.exists() else None
     process.update(sei_identity(process))
-    process["parecer"] = parecer.assess(process, process["revisao"])
+    process["cadastro_sil"] = registry_lookup(folder, process) if process["status"] == "em_revisao" else None
+    process["parecer"] = parecer.assess(process, process["revisao"], process["cadastro_sil"])
     return process
+
+
+def registry_lookup(folder, process):
+    """Consulta a SIL uma vez por processo e guarda o resultado (24 h; erros, 10 min)."""
+    if not sil.configured():
+        return None
+    def values(field):
+        return sorted({row["obtido"][field] for row in process["requerimentos"]
+                       if isinstance(row.get("obtido", {}).get(field), str)})
+    registrations = values("inscricao_imobiliaria")
+    cpfs = values("cpf_requerente") + values("cpf_conjuge")
+    key = [registrations, cpfs]
+    cache = folder / "sil.json"
+    if cache.exists():
+        saved = load(cache)
+        age = time.time() - saved["dados"].get("consultado_em", 0)
+        failed = any(name.startswith("erro") for name in saved["dados"])
+        if saved.get("chave") == key and age < (600 if failed else 86400):
+            return saved["dados"]
+    data = sil.lookup(registrations[0] if len(registrations) == 1 else None, cpfs)
+    save(cache, {"chave": key, "dados": data})
+    return data
+
+
+def batch_summary(path):
+    """Uma linha por processo com o resultado do parecer, para a lista e a exportação."""
+    manifest = path / "manifest.json"
+    rows = []
+    for item in load(manifest) if manifest.exists() else []:
+        row = {"id": item["id"], "processo": item["processo"],
+               "concluido": (path / item["id"] / "complete.json").exists()}
+        if row["concluido"]:
+            try:
+                report = process_detail(path, item["id"])["parecer"]
+            except (OSError, ValueError, KeyError):
+                row["resultado"] = "erro"
+                rows.append(row)
+                continue
+            summary = report["resumo"]
+            row.update(sei=report["numero_processo_sei"], resultado=report["resultado"],
+                       requerente=summary["requerente"], cpf=summary["cpf"],
+                       inscricao=summary["inscricao_imobiliaria"], modalidade=summary["modalidade"],
+                       renda_familiar_centavos=summary["renda_familiar_centavos"],
+                       motivos=report["motivos_indeferimento"] or report["pendencias"]
+                       or report["conferencias_cadastrais"])
+        else:
+            row["resultado"] = "processando"
+        rows.append(row)
+    return rows
