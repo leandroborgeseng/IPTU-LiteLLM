@@ -66,3 +66,7 @@ em branco. A resposta precisa conter exatamente os campos `exercicio` e
 que o modelo retornou por instrução de texto. Ele não exige suporte a JSON Schema
 no gateway. Os testes exercitam a leitura multimodal pelo LiteLLM. O serviço de
 OCR dedicado da NVIDIA continua sendo uma integração separada.
+
+O diagnóstico distingue JSON direto, JSON em bloco Markdown e resposta sem
+conteúdo. Para texto que não pôde ser interpretado como JSON, mostra uma prévia
+de até 240 caracteres. Essa prévia é usada apenas no teste de imagens sintéticas.

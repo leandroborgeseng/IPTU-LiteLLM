@@ -5,6 +5,7 @@ import hmac
 import html
 import json
 import os
+import re
 import socket
 import ssl
 import sys
@@ -131,7 +132,24 @@ def check_vision(model, case):
         if result["motivo_termino"] == "length":
             result["status"] = "resposta_truncada"
             return result
-        value = json.loads(choice["message"]["content"])
+        content = choice["message"]["content"]
+        if not isinstance(content, str) or not content.strip():
+            result["status"] = "resposta_sem_conteudo"
+            return result
+        content = content.strip()
+        fenced = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", content, re.DOTALL | re.IGNORECASE)
+        result["formato"] = "bloco_markdown" if fenced else "texto"
+        try:
+            value = json.loads(fenced.group(1) if fenced else content)
+        except ValueError:
+            result["status"] = "json_invalido"
+            key = os.environ.get("LITELLM_API_KEY", "").strip()
+            if key:
+                content = content.replace(key, "[chave omitida]")
+            result["previa"] = content[:240]
+            return result
+        if not fenced:
+            result["formato"] = "json_direto"
     except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         result["status"] = "json_invalido"
         return result
