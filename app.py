@@ -8,10 +8,13 @@ import os
 import re
 import socket
 import ssl
+import subprocess
 import sys
+import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import BoundedSemaphore
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -19,6 +22,8 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 VISION_MODELS = ("gemma-4-12b-it", "qwen3.8-27b", "qwen3.8-27b-fast")
 VISION_CASES = {"sim": True, "em_branco": None}
+MAX_PDF_BYTES = 10 * 1024 * 1024
+PDF_SLOTS = BoundedSemaphore(2)
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
@@ -104,7 +109,16 @@ def check_vision(model, case):
     if model not in VISION_MODELS or case not in VISION_CASES:
         return {"status": "parametros_invalidos"}
     expected = {"exercicio": 2027, "reside_no_imovel": VISION_CASES[case]}
-    image = base64.b64encode((FIXTURES / f"{case}.png").read_bytes()).decode("ascii")
+    png = (FIXTURES / f"{case}.png").read_bytes()
+    result = extract_form_page(model, png, show_preview=True)
+    result.update(caso=case, esperado=expected)
+    if result["status"] == "extraido":
+        result["status"] = "aprovado" if result["obtido"] == expected else "divergente"
+    return result
+
+
+def extract_form_page(model, png, *, show_preview=False):
+    image = base64.b64encode(png).decode("ascii")
     body = {
         "model": model,
         "stream": False,
@@ -122,7 +136,7 @@ def check_vision(model, case):
     }
     started = time.monotonic()
     result, payload = gateway_request("/chat/completions", body, timeout=40)
-    result.update(modelo=model, caso=case, esperado=expected,
+    result.update(modelo=model,
                   tempo_ms=round((time.monotonic() - started) * 1000))
     if result["status"] != "conectado":
         return result
@@ -143,10 +157,11 @@ def check_vision(model, case):
             value = json.loads(fenced.group(1) if fenced else content)
         except ValueError:
             result["status"] = "json_invalido"
-            key = os.environ.get("LITELLM_API_KEY", "").strip()
-            if key:
-                content = content.replace(key, "[chave omitida]")
-            result["previa"] = content[:240]
+            if show_preview:
+                key = os.environ.get("LITELLM_API_KEY", "").strip()
+                if key:
+                    content = content.replace(key, "[chave omitida]")
+                result["previa"] = content[:240]
             return result
         if not fenced:
             result["formato"] = "json_direto"
@@ -154,14 +169,40 @@ def check_vision(model, case):
         result["status"] = "json_invalido"
         return result
     if (
-        not isinstance(value, dict) or value.keys() != expected.keys()
+        not isinstance(value, dict) or value.keys() != {"exercicio", "reside_no_imovel"}
         or (value["exercicio"] is not None and type(value["exercicio"]) is not int)
         or (value["reside_no_imovel"] is not None and type(value["reside_no_imovel"]) is not bool)
     ):
         result["status"] = "esquema_invalido"
         return result
     result["obtido"] = value
-    result["status"] = "aprovado" if value == expected else "divergente"
+    result["status"] = "extraido"
+    return result
+
+
+def read_pdf_page(pdf, page):
+    if not pdf.startswith(b"%PDF-"):
+        return {"status": "pdf_invalido"}
+    with tempfile.TemporaryDirectory() as folder:
+        source = Path(folder) / "original.pdf"
+        output = Path(folder) / "pagina"
+        source.write_bytes(pdf)
+        try:
+            rendered = subprocess.run(
+                ["pdftoppm", "-f", str(page), "-l", str(page), "-singlefile",
+                 "-scale-to", "1800", "-gray", "-png", str(source), str(output)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            return {"status": "renderizacao_expirou", "pagina": page}
+        except OSError:
+            return {"status": "renderizador_indisponivel", "pagina": page}
+        png = output.with_suffix(".png")
+        if rendered.returncode or not png.is_file():
+            return {"status": "pagina_inacessivel", "pagina": page}
+        image = png.read_bytes()
+    result = extract_form_page("gemma-4-12b-it", image)
+    result["pagina"] = page
     return result
 
 
@@ -191,7 +232,17 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
 <option value="sim">Sim marcado</option><option value="em_branco">Em branco</option>
 </select></label>
 <button>Testar imagem</button>
-</form>{output}</main></html>"""
+</form>{output}
+<h2>Ler uma página de PDF</h2>
+<p>Use um PDF sintético ou anonimizado de até 10 MB. O Gemma extrai o exercício e a resposta sobre residência.</p>
+<form id="pdf-form">
+<label>PDF <input id="pdf-file" type="file" accept="application/pdf,.pdf" required></label>
+<label>Página <input id="pdf-page" type="number" min="1" max="1000" value="1" required></label>
+<button>Ler página</button>
+</form>
+<pre id="pdf-result" aria-live="polite" hidden></pre>
+<script src="/pdf.js" defer></script>
+</main></html>"""
         body = body.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -226,6 +277,8 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
         elif self.require_login():
             if self.path == "/":
                 self.send_page()
+            elif self.path == "/pdf.js":
+                self.send_data(200, "text/javascript; charset=utf-8", PDF_SCRIPT.encode())
             else:
                 self.send_error(404)
 
@@ -234,6 +287,8 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
             return
         if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin"):
             self.send_error(403)
+        elif urlsplit(self.path).path == "/pdf":
+            self.handle_pdf()
         elif self.path == "/verificar":
             self.send_page(check_models())
         elif self.path == "/visao":
@@ -250,6 +305,84 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
             self.send_page(check_vision(model, case))
         else:
             self.send_error(404)
+
+    def send_data(self, code, media_type, body):
+        self.send_response(code)
+        self.send_header("Content-Type", media_type)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_json(self, code, value):
+        self.send_data(code, "application/json; charset=utf-8", json.dumps(value).encode())
+
+    def handle_pdf(self):
+        try:
+            page, = parse_qs(urlsplit(self.path).query, max_num_fields=1)["pagina"]
+            page = int(page)
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 1 <= page <= 1000 or length <= 0:
+                raise ValueError
+        except (KeyError, ValueError):
+            self.send_json(400, {"status": "parametros_invalidos"})
+            return
+        if self.headers.get_content_type() != "application/pdf":
+            self.send_json(415, {"status": "tipo_invalido"})
+            return
+        if length > MAX_PDF_BYTES:
+            self.send_json(413, {"status": "pdf_excede_10_mb"})
+            return
+        if not PDF_SLOTS.acquire(blocking=False):
+            self.send_json(503, {"status": "aguarde_outro_teste_terminar"})
+            return
+        try:
+            self.connection.settimeout(20)
+            try:
+                pdf = self.rfile.read(length)
+            except TimeoutError:
+                self.send_json(408, {"status": "upload_expirou"})
+                return
+            if len(pdf) != length:
+                self.send_json(400, {"status": "upload_incompleto"})
+                return
+            self.send_json(200, read_pdf_page(pdf, page))
+        finally:
+            PDF_SLOTS.release()
+
+
+PDF_SCRIPT = """
+const form = document.querySelector('#pdf-form');
+const result = document.querySelector('#pdf-result');
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const file = document.querySelector('#pdf-file').files[0];
+  const page = document.querySelector('#pdf-page').value;
+  const button = form.querySelector('button');
+  result.hidden = false;
+  if (file.size > 10 * 1024 * 1024) {
+    result.textContent = 'Selecione um PDF de até 10 MB.';
+    return;
+  }
+  button.disabled = true;
+  result.textContent = 'Renderizando a página e consultando o LiteLLM…';
+  try {
+    const response = await fetch('/pdf?pagina=' + encodeURIComponent(page), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/pdf'},
+      body: file
+    });
+    const type = response.headers.get('Content-Type') || '';
+    result.textContent = type.includes('application/json')
+      ? JSON.stringify(await response.json(), null, 2)
+      : 'HTTP ' + response.status;
+  } catch {
+    result.textContent = 'Falha na comunicação com o painel.';
+  } finally {
+    button.disabled = false;
+  }
+});
+"""
 
 
 if __name__ == "__main__":

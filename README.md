@@ -70,3 +70,13 @@ OCR dedicado da NVIDIA continua sendo uma integração separada.
 O diagnóstico distingue JSON direto, JSON em bloco Markdown e resposta sem
 conteúdo. Para texto que não pôde ser interpretado como JSON, mostra uma prévia
 de até 240 caracteres. Essa prévia é usada apenas no teste de imagens sintéticas.
+
+## Piloto com upload de PDF
+
+No painel, em **Ler uma página de PDF**, envie um PDF sintético ou anonimizado
+de até 10 MB e informe a página (a partir de 1). O worker renderiza a página
+com Poppler, remove os temporários do volume em memória e envia apenas a
+imagem ao LiteLLM. A resposta informa a página, o modelo e os valores extraídos.
+O resultado preserva `null` quando a caixa não pode ser determinada. Esse teste
+não faz validação cadastral, não classifica o processo e não grava parecer.
+A inferência usa o alias Gemma já verificado no teste sintético.
