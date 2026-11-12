@@ -1,0 +1,23 @@
+services:
+  processamento:
+    build: .
+    command: ["python", "app.py", "worker"]
+    environment:
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:?Configure o LiteLLM privado}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:?Configure a chave}
+      IPTU_BATCH_MODEL: ${IPTU_BATCH_MODEL:-qwen3.8-27b-fast}
+      IPTU_PAGE_WORKERS: ${IPTU_PAGE_WORKERS:-8}
+    volumes:
+      - type: bind
+        source: ${IPTU_SHARED_DATA_DIR:?Informe o caminho do volume compartilhado}
+        target: /data
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped

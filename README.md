@@ -123,14 +123,36 @@ As confirmações cadastrais são registradas pelo operador. A consulta automát
 à SIL e a decisão oficial no SEI/F4 ainda estão fora desta entrega.
 
 
-O worker registra o OCR em português e o texto nativo de cada página. O
+O worker registra a transcrição do modelo de visão e o texto nativo de cada página. O
 parecer usa campos do requerimento quando a classificação é sustentada por
 um trecho do próprio pedido. O inventário indica possíveis comprovantes com
 a página de origem para conferência. Use `IPTU_BATCH_MODEL` para trocar o
 modelo do processamento em lote no Coolify. Para aplicar o OCR e a nova
 classificação aos lotes antigos, use **Reanalisar lote**.
 
-O worker processa até 4 páginas do mesmo PDF em paralelo por padrão. Ajuste
+O worker processa até 8 páginas do mesmo PDF em paralelo por padrão. Ajuste
 `IPTU_PAGE_WORKERS` no Coolify para testar outros limites, de 1 a 16. Meça o
 tempo e os erros do LiteLLM com o mesmo PDF antes de subir o limite. A barra
 de status exibe quantas páginas do PDF atual já têm resultado salvo.
+
+## Processamento no servidor do LiteLLM
+
+Para retirar o processamento de PDFs do servidor do painel, monte o mesmo
+armazenamento compartilhado nos dois hosts, com leitura e escrita para o UID
+10001. Em cada host, `IPTU_SHARED_DATA_DIR` deve apontar para a montagem desse
+mesmo armazenamento. Preserve os lotes existentes copiando o conteúdo de
+`/data` com os serviços parados, se desejar migrá-los.
+
+- Host do painel: suba com `docker compose -f compose.yaml -f compose.gpu-panel.yaml up -d --build`.
+  No Coolify, a configuração equivalente é `IPTU_RUN_WORKER=0` e uma única
+  montagem do armazenamento compartilhado em `/data`.
+- Host do LiteLLM: suba uma réplica com `docker compose -f compose.gpu-worker.yaml up -d --build`.
+  Configure a URL privada, a chave e o alias que realmente aponta para a H200.
+  Se o LiteLLM estiver no mesmo host, use um endereço acessível a partir do container.
+
+O worker remoto abre e renderiza os PDFs com Poppler no servidor do LiteLLM.
+O alias multimodal recebe a imagem e devolve a transcrição OCR e a classificação
+em uma chamada por página. O painel exibe as imagens de prévia gravadas pelo
+worker. Use a tela de lotes para testar PDFs nessa configuração. Depois da
+migração, reanalise os lotes antigos para atualizar os resultados e as prévias.
+O tempo exibido para LiteLLM inclui rede, fila e geração da resposta.

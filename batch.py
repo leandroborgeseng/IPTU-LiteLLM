@@ -36,7 +36,7 @@ ASSESSMENT_FIELDS = {
     "vinculo_imovel": str, "renda_bruta_centavos": int, "competencia_renda": str,
     "titular_renda": str, "atividade_economica_declarada": bool,
 }
-PAGE_SCHEMA = 3
+PAGE_SCHEMA = 4
 
 
 class ResetRequested(Exception):
@@ -257,25 +257,29 @@ def render_page(pdf, number):
         return png.read_bytes()
 
 
-def page_text(pdf, number, image):
-    texts = {}
-    for key, command, data in (
-        ("texto_pdf", ["pdftotext", "-f", str(number), "-l", str(number),
-                       "-layout", str(pdf), "-"], None),
-        ("texto_ocr", ["tesseract", "stdin", "stdout", "-l", "por", "--psm", "3"], image),
-    ):
+def native_page_text(pdf, number):
+    try:
+        completed = subprocess.run(
+            ["pdftotext", "-f", str(number), "-l", str(number), "-layout", str(pdf), "-"],
+            capture_output=True, timeout=20,
+        )
+        if completed.returncode == 0:
+            return {"texto_pdf": completed.stdout.decode("utf-8", errors="replace").strip()}
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return {}
+
+
+def cache_preview(evidence, image):
+    directory = evidence.parent.parent / "previews"
+    directory.mkdir(exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=directory, delete=False) as temporary:
         try:
-            completed = subprocess.run(command, input=data, capture_output=True, timeout=20,
-                                       env={**os.environ, "OMP_THREAD_LIMIT": "1"})
-            if completed.returncode == 0:
-                texts[key] = completed.stdout.decode("utf-8", errors="replace").strip()
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-    texts["status_ocr"] = (
-        "texto_encontrado" if texts.get("texto_ocr") else
-        "sem_texto" if "texto_ocr" in texts else "falha_ocr"
-    )
-    return texts
+            temporary.write(image)
+            temporary.flush()
+            os.replace(temporary.name, directory / (evidence.stem + ".png"))
+        finally:
+            Path(temporary.name).unlink(missing_ok=True)
 
 
 def normalize_text(text):
@@ -302,31 +306,53 @@ def validate_page_kind(result, texts):
 
 def page_workers():
     try:
-        return max(1, min(16, int(os.environ.get("IPTU_PAGE_WORKERS", "4"))))
+        return max(1, min(16, int(os.environ.get("IPTU_PAGE_WORKERS", "8"))))
     except ValueError:
-        return 4
+        return 8
 
 
 def process_page(pdf, number, evidence, analyze):
     check_reset()
     result = {"status": "pagina_inacessivel"}
     texts = {}
+    timing = {}
+    attempts = 0
+    stage = "renderizacao_ms"
+    started = time.monotonic()
     try:
         image = render_page(pdf, number)
         if image is not None:
+            timing[stage] = round((time.monotonic() - started) * 1000)
             check_reset()
-            texts = page_text(pdf, number, image)
+            if os.environ.get("IPTU_CACHE_PREVIEWS") == "1":
+                cache_preview(evidence, image)
+            stage = "texto_pdf_ms"
+            started = time.monotonic()
+            texts = native_page_text(pdf, number)
+            timing[stage] = round((time.monotonic() - started) * 1000)
             check_reset()
+            stage = "litellm_ms"
+            started = time.monotonic()
+            attempts += 1
             result = analyze(image, texts)
             if result["status"] == "falha_de_conexao" or result.get("codigo") in {429, 502, 503, 504}:
                 time.sleep(1)
                 check_reset()
+                attempts += 1
                 result = analyze(image, texts)
     except (OSError, subprocess.TimeoutExpired):
         pass
+    timing[stage] = round((time.monotonic() - started) * 1000)
     check_reset()
+    if "texto_ocr" in result:
+        texts["texto_ocr"] = result.pop("texto_ocr")
+        texts["status_ocr"] = "texto_encontrado" if texts["texto_ocr"] else "sem_texto"
+    else:
+        texts["status_ocr"] = "falha_ocr"
     result = validate_page_kind(result, texts)
-    save(evidence, {**result, **texts, "versao_extracao": PAGE_SCHEMA})
+    save(evidence, {**result, **texts, "versao_extracao": PAGE_SCHEMA,
+                    "tempos_ms": timing, "tentativas_ia": attempts})
+    return timing, attempts, result["status"] != "extraido" or texts.get("status_ocr") == "falha_ocr"
 
 
 def process_batch(path, analyze):
@@ -334,6 +360,11 @@ def process_batch(path, analyze):
     check_reset()
     state["status"] = "processando"
     state.pop("progresso", None)
+    state["desempenho"] = {
+        "paginas_processadas": 0, "paginas_com_falha": 0, "novas_tentativas": 0,
+        "duracao_ms": 0, "etapas": {},
+    }
+    batch_started = time.monotonic()
     save(path / "batch.json", state)
     manifest = path / "manifest.json"
     if not manifest.exists():
@@ -367,7 +398,9 @@ def process_batch(path, analyze):
                     previous = load(evidence)
                     if (previous.get("versao_extracao") == PAGE_SCHEMA
                         and previous.get("status") == "extraido"
-                        and previous.get("status_ocr") != "falha_ocr"):
+                        and previous.get("status_ocr") != "falha_ocr"
+                        and (os.environ.get("IPTU_CACHE_PREVIEWS") != "1"
+                             or (path / "previews" / (evidence.stem + ".png")).is_file())):
                         continue
                 pending.append((number, evidence))
             workers = min(page_workers(), len(pending))
@@ -381,7 +414,16 @@ def process_batch(path, analyze):
                     jobs = [pool.submit(process_page, pdf, number, evidence, analyze)
                             for number, evidence in pending]
                     for job in as_completed(jobs):
-                        job.result()
+                        timing, attempts, failed = job.result()
+                        performance = state["desempenho"]
+                        performance["paginas_processadas"] += 1
+                        performance["paginas_com_falha"] += int(failed)
+                        performance["novas_tentativas"] += max(0, attempts - 1)
+                        performance["duracao_ms"] = round((time.monotonic() - batch_started) * 1000)
+                        for stage, duration in timing.items():
+                            stats = performance["etapas"].setdefault(stage, {"soma_ms": 0, "paginas": 0})
+                            stats["soma_ms"] += duration
+                            stats["paginas"] += 1
                         progress["paginas_concluidas"] += 1
                         save(path / "batch.json", state)
                 finally:
@@ -389,6 +431,7 @@ def process_batch(path, analyze):
         save(folder / "complete.json", {"concluido": True})
     state.pop("progresso", None)
     state["status"] = "concluido"
+    state["desempenho"]["duracao_ms"] = round((time.monotonic() - batch_started) * 1000)
     save(path / "batch.json", state)
 
 

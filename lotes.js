@@ -83,6 +83,16 @@ async function refreshProcesses() {
     ? step[progress.etapa] + ' · página ' + progress.pagina + ' de ' + progress.total_paginas
     : lot.status) + ' · ' + done + '/' + lot.processos.length + ' processos lidos' +
     (lot.motivo ? ' · ' + lot.motivo : '');
+  const performance = lot.desempenho;
+  const formatSeconds = (ms) => (ms / 1000).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' s';
+  const labels = {renderizacao_ms:'renderização', texto_pdf_ms:'texto nativo do PDF', litellm_ms:'OCR e classificação no LiteLLM'};
+  const times = Object.entries(performance?.etapas || {}).map(([stage, stats]) =>
+    (labels[stage] || stage) + ' ' + formatSeconds(stats.soma_ms / stats.paginas));
+  get('batch-performance').textContent = performance?.paginas_processadas
+    ? formatSeconds(performance.duracao_ms) + ' no lote · ' + performance.paginas_processadas +
+      ' páginas processadas · ' + performance.paginas_com_falha + ' com falha · ' +
+      performance.novas_tentativas + ' novas tentativas · média por página: ' + times.join(' / ')
+    : '';
   setOptions(processList, lot.processos, (row) => row.processo + (row.concluido ? ' · revisão' : ''), 'Selecione um processo');
 }
 
@@ -261,6 +271,7 @@ async function refreshCleanup() {
     clearProcess();
     processList.replaceChildren();
     get('batch-status').textContent = '';
+    get('batch-performance').textContent = '';
     get('progress').value = 0;
     get('upload-status').textContent = 'Selecione um novo arquivo.';
     get('limpeza-status').textContent = 'Lotes removidos.';

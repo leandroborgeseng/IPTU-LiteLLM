@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl poppler-utils tesseract-ocr tesseract-ocr-por \
+    && apt-get install -y --no-install-recommends curl poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY app.py batch.py parecer.py lotes.html lotes.js ./

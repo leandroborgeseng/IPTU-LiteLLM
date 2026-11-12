@@ -1,0 +1,10 @@
+services:
+  worker:
+    environment:
+      IPTU_RUN_WORKER: "0"
+    volumes:
+      - type: bind
+        source: ${IPTU_SHARED_DATA_DIR:?Informe o caminho do volume compartilhado}
+        target: /data
+        bind:
+          create_host_path: false
