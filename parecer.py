@@ -1,5 +1,7 @@
 """Proposta auditável para o exercício de 2027 em Franca."""
 
+import unicodedata
+
 EXERCICIO = 2027
 TETO_CENTAVOS = 324200
 FONTE_TETO = "https://www3.franca.sp.gov.br/noticia/39898/prazo-para-solicitar-reduo-de-10-no-iptu-termina-nesta-quarta-feira.html"
@@ -12,6 +14,17 @@ CONFIRMACOES = {
     "edícula": "Edícula ausente ou com uso enquadrado",
     "prazo": "Data oficial do protocolo e prazo conferidos",
 }
+
+
+def normalize_modality(value):
+    text = unicodedata.normalize("NFKD", value.casefold())
+    text = "".join(character for character in text if not unicodedata.combining(character))
+    key = "_".join(text.replace("-", " ").replace("_", " ").split())
+    return {
+        "pensionista": "pensao",
+        "aposentado": "aposentadoria",
+        "aposentada": "aposentadoria",
+    }.get(key, key)
 
 
 def evidence(row, value):
@@ -65,7 +78,8 @@ def assess(process, review):
             )}))
 
     exercise = unique("exercicio")
-    modality = unique("modalidade_criterio")
+    modalities = {normalize_modality(item["valor"]) for item in facts.get("modalidade_criterio", [])}
+    modality = next(iter(modalities)) if len(modalities) == 1 else None
     complete = process["status"] == "em_revisao"
     eligible_modality = modality in {"aposentadoria", "pensao", "bpc", "renda_mensal_vitalicia"}
     ordinary = (complete and exercise == EXERCICIO and eligible_modality
@@ -73,7 +87,9 @@ def assess(process, review):
     if not complete:
         add("processamento", "pendente", "A leitura do processo ainda está em andamento.")
     if not process.get("numero_processo_sei"):
-        add("processo_sei", "pendente", "Número do SEI ausente ou divergente entre nomes e pastas.")
+        reason = ("Números SEI divergentes entre nomes e pastas." if process.get("sei_divergente")
+                  else "Número do SEI ausente nos nomes dos arquivos e pastas.")
+        add("processo_sei", "pendente", reason, process.get("fontes_numero_sei"))
     if exercise != EXERCICIO:
         add("exercicio", "pendente", "Confirme se o exercício solicitado é 2027.", facts.get("exercicio"))
     if modality in {"pcd", "doenca_grave", "neoplasia"}:
