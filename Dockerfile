@@ -5,6 +5,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY app.py .
+COPY fixtures/ ./fixtures/
 USER 10001:10001
 EXPOSE 8080
 CMD ["python", "app.py"]

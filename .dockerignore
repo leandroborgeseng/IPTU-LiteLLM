@@ -1,2 +1,5 @@
 *
 !app.py
+
+!fixtures/
+!fixtures/*.png

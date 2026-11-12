@@ -52,3 +52,17 @@ printf 'Authorization: Bearer %s\n' "$LITELLM_API_KEY" |
 ```
 
 Compartilhe apenas o status HTTP, a mensagem de erro ou os nomes dos modelos. O comando não imprime o cabeçalho de autenticação.
+
+## Testar leitura de imagens
+
+No painel, selecione um modelo e uma marcação e clique em **Testar imagem**.
+Para rodar os seis testes em sequência, use `python app.py vision` no terminal
+do worker. Cada linha contém modelo, caso, tempo, resultado esperado e resultado
+obtido quando o JSON é válido. A bateria retorna código 1 se houver alguma falha.
+
+As imagens sintéticas mostram exercício 2027 com “Sim” marcado ou as duas caixas
+em branco. A resposta precisa conter exatamente os campos `exercicio` e
+`reside_no_imovel`. A caixa em branco exige `null`. O diagnóstico valida o JSON
+que o modelo retornou por instrução de texto. Ele não exige suporte a JSON Schema
+no gateway. Os testes exercitam a leitura multimodal pelo LiteLLM. O serviço de
+OCR dedicado da NVIDIA continua sendo uma integração separada.
