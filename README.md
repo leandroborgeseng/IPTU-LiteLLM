@@ -157,3 +157,9 @@ em uma chamada por página. O painel exibe as imagens de prévia gravadas pelo
 worker. Use a tela de lotes para testar PDFs nessa configuração. Depois da
 migração, reanalise os lotes antigos para atualizar os resultados e as prévias.
 O tempo exibido para LiteLLM inclui rede, fila e geração da resposta.
+
+
+Fotos JPG, JPEG, PNG e WebP podem ser enviadas diretamente ou dentro da pasta
+de um processo no ZIP. Cada foto é tratada como uma página, com o original
+disponível para download. Para incluir fotos de um ZIP já importado, envie
+o ZIP novamente.

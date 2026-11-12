@@ -172,7 +172,7 @@ async function showProcess() {
     support.append(item);
   }
   const files = detail.arquivos.filter((doc) => doc.id);
-  setOptions(fileList, files, (row) => row.origem, 'Selecione um PDF');
+  setOptions(fileList, files, (row) => row.origem, 'Selecione um documento');
   const first = detail.requerimentos[0] || detail.paginas[0];
   if (first) showPdf(first.arquivo, first.pagina);
   else if (files.length) showPdf(files[0].id);

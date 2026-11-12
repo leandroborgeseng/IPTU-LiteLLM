@@ -1,4 +1,5 @@
 """Persistent pilot imports. Original paths are metadata, never filesystem destinations."""
+import io
 import json
 import os
 import re
@@ -15,6 +16,11 @@ from threading import Event, RLock, Thread
 
 import parecer
 
+from PIL import Image, ImageOps
+
+
+IMAGE_FORMATS = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP"}
+DOCUMENT_EXTENSIONS = {".pdf", *IMAGE_FORMATS}
 ROOT = Path(os.environ.get("IPTU_DATA_DIR", "/data"))
 CHUNK = 8 * 1024**2
 MAX_UPLOAD = 48 * 1024**3
@@ -93,7 +99,7 @@ def batch_dir(key):
 def create(name, size):
     if not isinstance(name, str) or not 0 < len(name) <= 255 or type(size) is not int:
         raise ValueError
-    if Path(name).suffix.lower() not in {".pdf", ".zip"} or not 0 < size <= MAX_UPLOAD:
+    if Path(name).suffix.lower() not in DOCUMENT_EXTENSIONS | {".zip"} or not 0 < size <= MAX_UPLOAD:
         raise ValueError
     if size > shutil.disk_usage(ROOT).free:
         raise OSError("espaco_insuficiente")
@@ -188,7 +194,7 @@ def inventory(path, name):
         if folders:
             return ("pasta", *folders), "/".join(folders)
         numbers = sei_numbers(parts[-1])
-        if Path(name).suffix.lower() == ".pdf" and len(numbers) == 1:
+        if Path(name).suffix.lower() in DOCUMENT_EXTENSIONS and len(numbers) == 1:
             return ("raiz",), next(iter(numbers))
         label = Path(name).stem
         return ("raiz",), label
@@ -220,7 +226,7 @@ def inventory(path, name):
                 suffix = parts.suffix.lower()
                 if parts.name.startswith(".") or "__MACOSX" in parts.parts:
                     continue
-                if suffix not in {".pdf", ".zip"}:
+                if suffix not in DOCUMENT_EXTENSIONS | {".zip"}:
                     add(original, error="formato_nao_processado", group=group)
                     continue
                 if suffix == ".zip" and depth >= 3:
@@ -250,7 +256,7 @@ def inventory(path, name):
                     if not retained:
                         target.unlink(missing_ok=True)
 
-    if Path(name).suffix.lower() == ".pdf":
+    if Path(name).suffix.lower() in DOCUMENT_EXTENSIONS:
         key = uuid.uuid4().hex
         os.link(upload, files / key)
         add(name, key)
@@ -259,7 +265,23 @@ def inventory(path, name):
     return list(processes.values())
 
 
-def render_page(pdf, number):
+def render_page(pdf, number, extension=".pdf"):
+    if extension in IMAGE_FORMATS:
+        if number != 1:
+            return None
+        try:
+            with Image.open(pdf, formats=[IMAGE_FORMATS[extension]]) as photo:
+                if photo.width * photo.height > 50_000_000:
+                    return None
+                photo.thumbnail((1800, 1800))
+                normalized = ImageOps.exif_transpose(photo).convert("RGBA")
+                page = Image.new("RGB", normalized.size, "white")
+                page.paste(normalized, mask=normalized.getchannel("A"))
+                output = io.BytesIO()
+                page.save(output, format="PNG")
+                return output.getvalue()
+        except (OSError, ValueError, Image.DecompressionBombError):
+            return None
     with tempfile.TemporaryDirectory() as tmp:
         png = Path(tmp) / "pagina.png"
         completed = subprocess.run(
@@ -326,7 +348,7 @@ def page_workers():
         return 8
 
 
-def process_page(pdf, number, evidence, analyze):
+def process_page(pdf, number, evidence, analyze, extension=".pdf"):
     check_reset()
     result = {"status": "pagina_inacessivel"}
     texts = {}
@@ -335,16 +357,17 @@ def process_page(pdf, number, evidence, analyze):
     stage = "renderizacao_ms"
     started = time.monotonic()
     try:
-        image = render_page(pdf, number)
+        image = render_page(pdf, number, extension)
         if image is not None:
             timing[stage] = round((time.monotonic() - started) * 1000)
             check_reset()
             if os.environ.get("IPTU_CACHE_PREVIEWS") == "1":
                 cache_preview(evidence, image)
-            stage = "texto_pdf_ms"
-            started = time.monotonic()
-            texts = native_page_text(pdf, number)
-            timing[stage] = round((time.monotonic() - started) * 1000)
+            if extension == ".pdf":
+                stage = "texto_pdf_ms"
+                started = time.monotonic()
+                texts = native_page_text(pdf, number)
+                timing[stage] = round((time.monotonic() - started) * 1000)
             check_reset()
             stage = "litellm_ms"
             started = time.monotonic()
@@ -394,7 +417,10 @@ def process_batch(path, analyze):
                 continue
             key = file["id"]
             pdf = path / "files" / key
+            extension = PurePosixPath(file["origem"]).suffix.lower()
             count_path = folder / (key + ".json")
+            if extension in IMAGE_FORMATS and not count_path.exists():
+                save(count_path, {"paginas": 1, "total": 1})
             if not count_path.exists():
                 try:
                     info = subprocess.run(["pdfinfo", str(pdf)], capture_output=True,
@@ -426,7 +452,7 @@ def process_batch(path, analyze):
                 save(path / "batch.json", state)
                 pool = ThreadPoolExecutor(max_workers=workers)
                 try:
-                    jobs = [pool.submit(process_page, pdf, number, evidence, analyze)
+                    jobs = [pool.submit(process_page, pdf, number, evidence, analyze, extension)
                             for number, evidence in pending]
                     for job in as_completed(jobs):
                         timing, attempts, failed = job.result()
@@ -493,6 +519,15 @@ def run_worker(analyze):
 def start_worker(analyze):
     ROOT.mkdir(parents=True, exist_ok=True)
     Thread(target=run_worker, args=(analyze,), daemon=True).start()
+
+
+def original_document(path, file_id):
+    manifest = load(path / "manifest.json") if (path / "manifest.json").is_file() else []
+    for process in manifest:
+        for file in process["arquivos"]:
+            if file["id"] == file_id:
+                return PurePosixPath(file["origem"])
+    raise FileNotFoundError
 
 
 def process_detail(path, process_id):

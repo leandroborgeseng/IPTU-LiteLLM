@@ -26,8 +26,8 @@ small { color: #42546b; }
 <main>
 <section>
 <h2>Importar lote</h2>
-<form id="upload"><input id="upload-file" type="file" accept=".pdf,.zip" required><button>Enviar e processar</button></form>
-<p id="upload-status" role="status">Use PDFs ou ZIPs sintéticos ou anonimizados neste piloto.</p>
+<form id="upload"><input id="upload-file" type="file" accept=".pdf,.zip,.jpg,.jpeg,.png,.webp" required><button>Enviar e processar</button></form>
+<p id="upload-status" role="status">Use PDFs, fotos ou ZIPs sintéticos ou anonimizados neste piloto.</p>
 <progress id="progress" max="1" value="0"></progress>
 </section>
 <section>
@@ -43,9 +43,9 @@ small { color: #42546b; }
 <div id="review">
 <section>
 <h2>Documento original</h2>
-<label>PDF <select id="files"></select></label>
-<p><a id="original" hidden>Baixar PDF original</a></p>
-<img id="viewer" alt="Página do PDF original" hidden>
+<label>Arquivo <select id="files"></select></label>
+<p><a id="original" hidden>Baixar arquivo original</a></p>
+<img id="viewer" alt="Página do documento original" hidden>
 </section>
 <section>
 <h2>Conferência</h2>

@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import BoundedSemaphore
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 import batch
@@ -492,7 +492,8 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                     self.send_json(503, {"status": "visualizador_ocupado"})
                     return
                 try:
-                    png = batch.render_page(source, page)
+                    original = batch.original_document(path, parts[4])
+                    png = batch.render_page(source, page, original.suffix.lower())
                 except subprocess.TimeoutExpired:
                     png = None
                 finally:
@@ -503,15 +504,17 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                 return
             if self.command == "GET" and len(parts) == 5 and parts[3] == "pdf" and batch.ID.fullmatch(parts[4]):
                 source = path / "files" / parts[4]
-                with source.open("rb") as pdf:
+                original = batch.original_document(path, parts[4])
+                with source.open("rb") as document:
                     self.send_response(200)
-                    self.send_header("Content-Type", "application/pdf")
-                    self.send_header("Content-Disposition", "attachment; filename=processo.pdf")
+                    media_type = "application/pdf" if original.suffix.lower() == ".pdf" else "application/octet-stream"
+                    self.send_header("Content-Type", media_type)
+                    self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(original.name, safe=""))
                     self.send_header("X-Content-Type-Options", "nosniff")
                     self.send_header("Cache-Control", "no-store")
                     self.send_header("Content-Length", str(source.stat().st_size))
                     self.end_headers()
-                    shutil.copyfileobj(pdf, self.wfile)
+                    shutil.copyfileobj(document, self.wfile)
                 return
             raise FileNotFoundError
         except batch.ResetRequested:
