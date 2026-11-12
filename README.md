@@ -28,3 +28,27 @@ Documentação do Coolify: https://coolify.io/docs/applications/builds/docker-co
 - O diagnóstico também pode ser executado no terminal do container com `python app.py check`.
 
 O próximo teste é usar uma página sintética para verificar um alias multimodal e confirmar a rota do OCR dedicado. A listagem por si só não comprova suporte a imagem ou execução nas H200.
+
+## Diagnosticar com curl no terminal do worker
+
+No Coolify, abra **Terminal** no serviço `worker`. Em ambos os comandos, a expansão abaixo aceita a URL base com ou sem `/v1`.
+
+```sh
+BASE="${LITELLM_BASE_URL%/}"
+MODELS_URL="${BASE%/v1}/v1/models"
+curl --noproxy '*' --connect-timeout 5 --max-time 15 -sS \
+  -o /dev/null -w 'HTTP %{http_code}\n' "$MODELS_URL"
+```
+
+Um HTTP 401 ou 403 sem chave confirma que houve resposta HTTP. HTTP 000 e a mensagem do curl ajudam a identificar timeout, conexão recusada ou falha TLS.
+
+Se o gateway respondeu, repita usando a chave que já está no ambiente. Evite executar com rastreamento de shell ativo.
+
+```sh
+set +x
+printf 'Authorization: Bearer %s\n' "$LITELLM_API_KEY" |
+  curl --noproxy '*' --connect-timeout 5 --max-time 15 -sS \
+    -H @- -w '\nHTTP %{http_code}\n' "$MODELS_URL"
+```
+
+Compartilhe apenas o status HTTP, a mensagem de erro ou os nomes dos modelos. O comando não imprime o cabeçalho de autenticação.
