@@ -1,9 +1,12 @@
 import base64
 import binascii
+import errno
 import hmac
 import html
 import json
 import os
+import socket
+import ssl
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
@@ -16,6 +19,26 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
+def connection_failure(error, base):
+    cause = error.reason if isinstance(error, URLError) else error
+    if isinstance(cause, TimeoutError):
+        detail = "tempo_limite"
+    elif isinstance(cause, socket.gaierror):
+        detail = "falha_dns"
+    elif isinstance(cause, ssl.SSLError):
+        detail = "falha_tls"
+    else:
+        detail = {
+            errno.ECONNREFUSED: "conexao_recusada",
+            errno.EHOSTUNREACH: "host_inacessivel",
+            errno.ENETUNREACH: "rede_inacessivel",
+            errno.ECONNRESET: "conexao_interrompida",
+            errno.ETIMEDOUT: "tempo_limite",
+        }.get(getattr(cause, "errno", None), "erro_de_transporte")
+    return {"status": "falha_de_conexao", "detalhe": detail,
+            "destino": base.netloc, "rota": "/v1/models"}
+
+
 def check_models():
     url = os.environ.get("LITELLM_BASE_URL", "").rstrip("/")
     try:
@@ -26,6 +49,7 @@ def check_models():
             or base.path not in {"", "/v1"}
         ):
             return {"status": "configuracao_invalida"}
+        _ = base.port
         token = os.environ["LITELLM_API_KEY"].strip()
         if not token or not token.isascii() or any(c.isspace() for c in token):
             return {"status": "segredo_invalido"}
@@ -51,8 +75,8 @@ def check_models():
         return {"status": "conectado", "modelos": models}
     except HTTPError as error:
         return {"status": "erro_http", "codigo": error.code}
-    except (URLError, TimeoutError, OSError):
-        return {"status": "falha_de_conexao"}
+    except OSError as error:
+        return connection_failure(error, base)
     except (ValueError, UnicodeError):
         return {"status": "resposta_invalida"}
 
