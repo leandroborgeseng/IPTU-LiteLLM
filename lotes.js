@@ -75,7 +75,7 @@ async function refreshProcesses() {
   get('reanalisar').hidden = !['concluido', 'falha'].includes(lot.status);
   const done = lot.processos.filter((row) => row.concluido).length;
   const progress = lot.progresso;
-  const step = {renderizando:'Renderizando', consultando_ia:'Consultando LiteLLM', nova_tentativa_ia:'Tentando novamente no LiteLLM'};
+  const step = {renderizando:'Renderizando', ocr:'Executando OCR', consultando_ia:'Consultando LiteLLM', nova_tentativa_ia:'Tentando novamente no LiteLLM'};
   get('batch-status').textContent = (progress
     ? step[progress.etapa] + ' · página ' + progress.pagina + ' de ' + progress.total_paginas
     : lot.status) + ' · ' + done + '/' + lot.processos.length + ' processos lidos' +
@@ -142,6 +142,22 @@ async function showProcess() {
   }
   for (const text of detail.pendencias) addText(get('issues'), text);
   for (const doc of detail.arquivos) if (doc.erro) addText(get('issues'), doc.origem + ' · ' + doc.erro);
+  const support = get('comprovantes');
+  support.replaceChildren();
+  const labels = {identificacao:'Identificação', beneficio_e_renda:'Benefício e renda',
+    residencia:'Residência', vinculo_com_imovel:'Vínculo com o imóvel', representacao:'Representação'};
+  for (const [kind, pages] of Object.entries(report.possiveis_comprovantes || {})) {
+    const item = document.createElement('li');
+    item.textContent = labels[kind] + (pages.length ? '' : ' · nenhum localizado');
+    for (const source of pages) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Ver página ' + source.pagina;
+      button.onclick = () => showPdf(source.arquivo, source.pagina);
+      item.append(' ', button);
+    }
+    support.append(item);
+  }
   const files = detail.arquivos.filter((doc) => doc.id);
   setOptions(fileList, files, (row) => row.origem, 'Selecione um PDF');
   const first = detail.requerimentos[0] || detail.paginas[0];
@@ -160,6 +176,27 @@ async function showProcess() {
         line.textContent = field + ': ' + value;
         return line;
       }));
+    if (row.motivo_classificacao) {
+      const note = document.createElement('div');
+      note.textContent = row.motivo_classificacao;
+      item.append(note);
+    }
+    if (row.texto_ocr || row.texto_pdf || row.status_ocr) {
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = 'Texto da página · ' + (row.status_ocr || 'texto extraído');
+      details.append(summary);
+      for (const [label, text] of [['OCR', row.texto_ocr], ['Camada de texto do PDF', row.texto_pdf]]) {
+        if (!text) continue;
+        const title = document.createElement('strong');
+        title.textContent = label;
+        const content = document.createElement('pre');
+        content.style.whiteSpace = 'pre-wrap';
+        content.textContent = text;
+        details.append(title, content);
+      }
+      item.append(details);
+    }
     get('pages').append(item);
   }
   get('notes').hidden = detail.status !== 'em_revisao';

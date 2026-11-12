@@ -37,6 +37,25 @@ def assess(process, review):
         values = {item["valor"] for item in facts.get(field, [])}
         return next(iter(values)) if len(values) == 1 else None
 
+    inventory = []
+    proof_types = {
+        "identificacao": {"identidade", "cpf"},
+        "beneficio_e_renda": {"beneficio", "holerite"},
+        "residencia": {"residencia"},
+        "vinculo_com_imovel": {"posse"},
+        "representacao": {"procuracao"},
+    }
+    support = {key: [] for key in proof_types}
+    for row in pages:
+        kind = row.get("tipo")
+        source = evidence(row, kind)
+        inventory.append({**source, "status_leitura": row["status"],
+                          "status_ocr": row.get("status_ocr"),
+                          "trecho_classificacao": row.get("evidencia_tipo")})
+        for key, kinds in proof_types.items():
+            if row["status"] == "extraido" and kind in kinds:
+                support[key].append(source)
+
     income = []
     for row in pages:
         data = row.get("obtido", {})
@@ -91,10 +110,14 @@ def assess(process, review):
             [{"referencia_conferencia": income_source, "valor_centavos": amount}])
     else:
         add("renda", "pendente", "Confira a renda familiar e registre o total bruto mensal com a fonte.")
-    if any(row["status"] != "extraido" for row in pages) or any(
+    if any(row["status"] != "extraido" or row.get("status_ocr") == "falha_ocr" for row in pages) or any(
         doc["erro"] and doc["erro"] != "formato_nao_processado" for doc in process["arquivos"]
     ):
         add("leitura", "pendente", "Há arquivos ou páginas que precisam de conferência.")
+
+    if not forms:
+        rules[:] = [row for row in rules if row["criterio"] in {"processamento", "processo_sei", "leitura"}]
+        add("requerimento", "pendente", "Nenhum requerimento de isenção de IPTU foi confirmado. Confira o inventário das páginas.")
 
     blockers = [row["motivo"] for row in rules if row["status"] == "impedimento"]
     pending = [row["motivo"] for row in rules if row["status"] == "pendente"]
@@ -105,6 +128,7 @@ def assess(process, review):
             "fontes_numero_sei": process.get("fontes_numero_sei", []),
             "sei_divergente": process.get("sei_divergente", False),
             "exercicio": exercise, "modalidade": modality, "fatos_do_requerimento": facts,
+            "inventario_paginas": inventory, "possiveis_comprovantes": support,
             "comprovantes_de_renda_lidos": income, "renda_bruta_familiar_centavos": amount,
             "teto_centavos": TETO_CENTAVOS if exercise == EXERCICIO else None,
             "fontes": {"criterios": FONTE_CRITERIOS, "teto": FONTE_TETO}}

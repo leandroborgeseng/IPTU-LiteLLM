@@ -94,7 +94,7 @@ compactados e 150 GiB de extração acumulada. A capacidade para um lote de
 O processamento continua em segundo plano. O importador agrupa os documentos
 pela pasta de processo, lê ZIPs internos até o limite configurado no código
 e registra formatos que não processa, incluindo HTML. O worker percorre as
-páginas com o modelo padrão Gemma via LiteLLM e salva um resultado por página.
+páginas com o modelo padrão `qwen3.8-27b-fast` via LiteLLM e salva um resultado por página.
 Ao reiniciar, retoma as páginas que ainda não têm resultado salvo. Neste
 piloto, resultados de falha ficam visíveis para revisão após uma tentativa
 adicional nas falhas transitórias de transporte. Use uma única réplica.
@@ -121,3 +121,11 @@ rendimentos de terceiros. O teto de R$ 3.242,00 é o publicado pela Prefeitura
 para o período de solicitação em 2026. Casos sociais ficam em análise.
 As confirmações cadastrais são registradas pelo operador. A consulta automática
 à SIL e a decisão oficial no SEI/F4 ainda estão fora desta entrega.
+
+
+O worker registra o OCR em português e o texto nativo de cada página. O
+parecer usa campos do requerimento quando a classificação é sustentada por
+um trecho do próprio pedido. O inventário indica possíveis comprovantes com
+a página de origem para conferência. Use `IPTU_BATCH_MODEL` para trocar o
+modelo do processamento em lote no Coolify. Para aplicar o OCR e a nova
+classificação aos lotes antigos, use **Reanalisar lote**.

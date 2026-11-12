@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import unicodedata
 import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -23,7 +24,8 @@ ID = re.compile(r"[a-f0-9]{32}")
 WAKE = Event()
 LOCK = RLock()
 KINDS = ("requerimento", "identidade", "cpf", "residencia", "beneficio", "posse",
-         "procuracao", "certidao", "laudo", "holerite", "outro")
+         "procuracao", "certidao", "laudo", "holerite", "execucao_fiscal",
+         "peticao_judicial", "despacho", "capa", "carnê_iptu", "imunidade_tributaria", "outro")
 FIELDS = {"exercicio": int, "reside_no_imovel": bool, "nome_requerente": str,
           "cpf_requerente": str, "cpf_conjuge": str, "inscricao_imobiliaria": str,
           "modalidade": str}
@@ -33,7 +35,7 @@ ASSESSMENT_FIELDS = {
     "vinculo_imovel": str, "renda_bruta_centavos": int, "competencia_renda": str,
     "titular_renda": str, "atividade_economica_declarada": bool,
 }
-PAGE_SCHEMA = 2
+PAGE_SCHEMA = 3
 
 
 class ResetRequested(Exception):
@@ -254,6 +256,49 @@ def render_page(pdf, number):
         return png.read_bytes()
 
 
+def page_text(pdf, number, image):
+    texts = {}
+    for key, command, data in (
+        ("texto_pdf", ["pdftotext", "-f", str(number), "-l", str(number),
+                       "-layout", str(pdf), "-"], None),
+        ("texto_ocr", ["tesseract", "stdin", "stdout", "-l", "por", "--psm", "3"], image),
+    ):
+        try:
+            completed = subprocess.run(command, input=data, capture_output=True, timeout=20,
+                                       env={**os.environ, "OMP_THREAD_LIMIT": "1"})
+            if completed.returncode == 0:
+                texts[key] = completed.stdout.decode("utf-8", errors="replace").strip()
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    texts["status_ocr"] = (
+        "texto_encontrado" if texts.get("texto_ocr") else
+        "sem_texto" if "texto_ocr" in texts else "falha_ocr"
+    )
+    return texts
+
+
+def normalize_text(text):
+    folded = unicodedata.normalize("NFKD", text.lower())
+    return " ".join(re.findall(r"[a-z0-9]+", "".join(
+        character for character in folded if not unicodedata.combining(character)
+    )))
+
+
+def validate_page_kind(result, texts):
+    if result.get("tipo") != "requerimento":
+        return result
+    quote = normalize_text(result.get("evidencia_tipo") or "")
+    has_tax = "iptu" in quote or "imposto predial e territorial urbano" in quote
+    has_request = any(word.startswith(("requer", "solicit", "pedido", "declar", "formulario"))
+                      for word in quote.split())
+    if (has_tax and has_request and "isencao" in quote and any(
+        quote in normalize_text(texts.get(key, "")) for key in ("texto_ocr", "texto_pdf")
+    )):
+        return {**result, "requerimento_isencao_confirmado": True}
+    return {**result, "tipo": "outro", "obtido": {},
+            "motivo_classificacao": "Requerimento de isenção sem trecho confirmado no texto da página."}
+
+
 def process_batch(path, analyze):
     state = load(path / "batch.json")
     check_reset()
@@ -289,28 +334,36 @@ def process_batch(path, analyze):
                 evidence = folder / f"{key}-{number}.json"
                 if evidence.exists():
                     previous = load(evidence)
-                    if previous.get("versao_extracao") == PAGE_SCHEMA and previous.get("status") == "extraido":
+                    if (previous.get("versao_extracao") == PAGE_SCHEMA
+                        and previous.get("status") == "extraido"
+                        and previous.get("status_ocr") != "falha_ocr"):
                         continue
                 state["progresso"] = {"pagina": number, "total_paginas": count, "etapa": "renderizando"}
                 save(path / "batch.json", state)
                 result = {"status": "pagina_inacessivel"}
+                texts = {}
                 try:
                     image = render_page(pdf, number)
                     if image is not None:
                         check_reset()
+                        state["progresso"]["etapa"] = "ocr"
+                        save(path / "batch.json", state)
+                        texts = page_text(pdf, number, image)
+                        check_reset()
                         state["progresso"]["etapa"] = "consultando_ia"
                         save(path / "batch.json", state)
-                        result = analyze(image)
+                        result = analyze(image, texts)
                         if result["status"] == "falha_de_conexao" or result.get("codigo") in {429, 502, 503, 504}:
                             check_reset()
                             state["progresso"]["etapa"] = "nova_tentativa_ia"
                             save(path / "batch.json", state)
                             time.sleep(1)
-                            result = analyze(image)
+                            result = analyze(image, texts)
                 except (OSError, subprocess.TimeoutExpired):
                     pass
                 check_reset()
-                save(evidence, {**result, "versao_extracao": PAGE_SCHEMA})
+                result = validate_page_kind(result, texts)
+                save(evidence, {**result, **texts, "versao_extracao": PAGE_SCHEMA})
         save(folder / "complete.json", {"concluido": True})
     state.pop("progresso", None)
     state["status"] = "concluido"
@@ -389,15 +442,15 @@ def process_detail(path, process_id):
             result = load(evidence)
             row = {"arquivo": key, "origem": item["origem"], "pagina": number, **result}
             documents.append(row)
-            if result.get("tipo") == "requerimento":
+            if result.get("requerimento_isencao_confirmado"):
                 candidates.append(row)
     process["paginas"] = documents
     process["requerimentos"] = candidates
     process["status"] = "em_revisao" if (folder / "complete.json").exists() else "processando"
     process["pendencias"] = ["Conferir os campos e anexos com as páginas de origem.", "Consulta à SIL pendente."]
     if not candidates:
-        process["pendencias"].append("Nenhuma página foi classificada como requerimento.")
-    if any(item["erro"] for item in process["arquivos"]) or any(row["status"] != "extraido" for row in documents):
+        process["pendencias"].append("Nenhum requerimento de isenção de IPTU foi confirmado no texto das páginas.")
+    if any(item["erro"] for item in process["arquivos"]) or any(row["status"] != "extraido" or row.get("status_ocr") == "falha_ocr" for row in documents):
         process["pendencias"].append("Há arquivos ou páginas com falha de leitura.")
     review = folder / "review.json"
     process["revisao"] = load(review) if review.exists() else None
