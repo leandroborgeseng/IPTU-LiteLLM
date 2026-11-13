@@ -18,7 +18,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from threading import BoundedSemaphore, Thread
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 import avaliacao
@@ -530,14 +530,27 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
 
     def require_login(self):
         scheme, _, credential = self.headers.get("Authorization", "").partition(" ")
+        token = os.environ.get("IPTU_API_TOKEN", "")
+        if (scheme.lower() == "bearer" and len(token) >= 24 and urlsplit(self.path).path.startswith("/api/v1/")
+                and hmac.compare_digest(credential.strip().encode(), token.encode())):
+            return True
         if scheme.lower() == "basic":
             try:
                 supplied = base64.b64decode(credential, validate=True)
             except (ValueError, binascii.Error):
                 supplied = b""
-            user = os.environ.get("IPTU_ADMIN_USER", "iptu")
-            password = os.environ.get("IPTU_ADMIN_PASSWORD", "")
-            if password and hmac.compare_digest(supplied, f"{user}:{password}".encode()):
+            # Login individual por servidor (IPTU_USUARIOS="ana:senha;joao:senha"), para a trilha de quem
+            # decidiu cada processo; IPTU_ADMIN_USER/IPTU_ADMIN_PASSWORD continua valendo.
+            accounts = [(os.environ.get("IPTU_ADMIN_USER", "iptu"), os.environ.get("IPTU_ADMIN_PASSWORD", ""))]
+            for entry in re.split(r"[;\n]", os.environ.get("IPTU_USUARIOS", "")):
+                name, _, secret = entry.strip().partition(":")
+                if name and len(secret) >= 12:
+                    accounts.append((name, secret))
+            matched = False
+            for user, password in accounts:
+                if password and hmac.compare_digest(supplied, f"{user}:{password}".encode()):
+                    matched = True
+            if matched:
                 return True
         self.send_response(401)
         self.send_header("WWW-Authenticate", 'Basic realm="IPTU", charset="UTF-8"')
@@ -553,13 +566,25 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
         elif self.require_login():
             if self.path == "/":
                 self.send_data(200, "text/html; charset=utf-8", (Path(__file__).parent / "lotes.html").read_bytes())
+            elif self.path == "/marca/logo":
+                # Logotipo oficial: coloque logo.svg, logo.png, logo.jpg ou logo.webp em /data/marca/.
+                for name, kind in (("logo.svg", "image/svg+xml"), ("logo.png", "image/png"),
+                                   ("logo.jpg", "image/jpeg"), ("logo.webp", "image/webp")):
+                    file = batch.ROOT / "marca" / name
+                    if file.is_file():
+                        self.send_data(200, kind, file.read_bytes())
+                        break
+                else:
+                    self.send_json(404, {"status": "sem_logotipo"})
             elif self.path == "/lotes.js":
                 self.send_data(200, "text/javascript; charset=utf-8", (Path(__file__).parent / "lotes.js").read_bytes())
             elif self.path == "/diagnostico":
                 self.send_page()
-            elif self.path.startswith("/api/lotes"):
+            elif self.path.startswith("/api/lotes") and urlsplit(self.path).path != "/api/lotes-estado":
                 self.handle_batches()
-            elif urlsplit(self.path).path.startswith(("/api/processos", "/api/auditoria")):
+            elif urlsplit(self.path).path.startswith("/api/v1/"):
+                self.handle_integration()
+            elif urlsplit(self.path).path.startswith(("/api/processos", "/api/auditoria", "/api/painel", "/api/lotes-estado")):
                 self.handle_history()
             elif self.path == "/pdf.js":
                 self.send_data(200, "text/javascript; charset=utf-8", PDF_SCRIPT.encode())
@@ -610,6 +635,31 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
         except (ValueError, UnicodeError, binascii.Error):
             return None
 
+    def handle_integration(self):
+        """API de integração (somente leitura): aceite, dados do aceite, datas e origem da decisão."""
+        url = urlsplit(self.path)
+        query = {key: values[0] for key, values in parse_qs(url.query).items()}
+        try:
+            if url.path == "/api/v1/processos":
+                since = query.get("desde", "0")
+                if not since.replace(".", "", 1).isdigit():
+                    since = time.mktime(time.strptime(since[:19], "%Y-%m-%dT%H:%M:%S" if "T" in since else "%Y-%m-%d"))
+                page = max(1, int(query.get("pagina", "1")))
+                size = max(1, min(500, int(query.get("por_pagina", "100"))))
+                rows, total = historico.changed_since(float(since), query.get("decisao", ""), page, size)
+                self.send_json(200, {"processos": rows, "total": total, "pagina": page, "por_pagina": size,
+                                     "paginas": max(1, -(-total // size))})
+            elif url.path.startswith("/api/v1/processos/"):
+                row = historico.find_by_sei(unquote(url.path.rsplit("/", 1)[1]))
+                if row is None:
+                    self.send_json(404, {"status": "processo_nao_encontrado"})
+                else:
+                    self.send_json(200, historico.integration_view(row))
+            else:
+                self.send_json(404, {"status": "nao_encontrado"})
+        except (ValueError, OverflowError):
+            self.send_json(400, {"status": "dados_invalidos"})
+
     def handle_history(self):
         """Lista, busca e exporta o histórico de todos os lotes (banco SQLite)."""
         url = urlsplit(self.path)
@@ -620,10 +670,19 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
             if url.path == "/api/auditoria":
                 self.send_json(200, historico.audit())
             elif url.path == "/api/processos":
-                rows, totals = historico.search(**params, limite=int(query.get("limite", "500")))
-                self.send_json(200, {"processos": rows, "totais": totals})
+                size = max(10, min(500, int(query.get("por_pagina", "50"))))
+                page = max(1, int(query.get("pagina", "1")))
+                rows, totals, total = historico.search(**params, limite=size, pagina=page)
+                self.send_json(200, {"processos": rows, "totais": totals, "total": total, "pagina": page,
+                                     "por_pagina": size, "paginas": max(1, -(-total // size))})
+            elif url.path == "/api/lotes-estado":
+                self.send_json(200, batch.lots_overview())
+            elif url.path == "/api/painel":
+                report = historico.dashboard(params["lote_id"], max(7, min(90, int(query.get("dias", "14")))))
+                report["ritmo_processos_hora"] = batch.throughput(params["lote_id"])
+                self.send_json(200, report)
             elif url.path == "/api/processos/exportar":
-                rows, _ = historico.search(**params, limite=100000, completo=True)
+                rows, _, _ = historico.search(**params, limite=100000, completo=True)
                 body = json.dumps({"versao_formato": historico.EXPORT_VERSION, "gerado_em": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                                    "filtros": params, "processos": [row["parecer"] for row in rows if row["parecer"]]},
                                   ensure_ascii=False).encode()
@@ -635,7 +694,7 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                 self.end_headers()
                 self.wfile.write(body)
             elif url.path == "/api/processos/exportar.csv":
-                rows, _ = historico.search(**params, limite=100000)
+                rows, _, _ = historico.search(**params, limite=100000)
                 output = io.StringIO()
                 writer = csv.writer(output, delimiter=";")
                 writer.writerow(["lote", "processo", "sei", "requerente", "cpf", "inscricao", "modalidade",
@@ -819,11 +878,19 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                         or not isinstance(source, str) or len(source) > 500
                         or (amount is not None and not source.strip())):
                         raise ValueError
-                    review = {"nota": note.strip(), "registrada_em": int(time.time()),
+                    decision = data.get("decisao")
+                    if decision is not None:
+                        if (not isinstance(decision, dict) or decision.get("resultado") not in {"deferido", "indeferido"}
+                                or not isinstance(decision.get("justificativa"), str)
+                                or not 10 <= len(decision["justificativa"].strip()) <= 2000):
+                            raise ValueError
+                        decision = {"resultado": decision["resultado"], "justificativa": decision["justificativa"].strip(),
+                                    "usuario": self.current_user(), "registrada_em": int(time.time())}
+                    review = {"nota": note.strip(), "registrada_em": int(time.time()), "usuario": self.current_user(),
                               "confirmacoes": confirmations, "renda_bruta_familiar_centavos": amount,
-                              "fonte_renda": source.strip()}
+                              "fonte_renda": source.strip(), "decisao": decision}
                     batch.save(path / detail["id"] / "review.json", review)
-                    batch.sync_process(path, detail["id"], "conferencia_manual")
+                    batch.sync_process(path, detail["id"], "decisao_humana" if decision else "conferencia_manual")
                     self.send_json(200, review)
                     return
             if self.command == "GET" and len(parts) == 6 and parts[3] == "pdf" and batch.ID.fullmatch(parts[4]):

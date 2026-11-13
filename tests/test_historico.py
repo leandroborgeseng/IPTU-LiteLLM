@@ -13,9 +13,14 @@ except ModuleNotFoundError as error:
     batch = None
 
 
+AI = {"enquadra": "deferido", "enquadra_conferir_cadastro": "deferido", "nao_enquadra": "indeferido",
+      "em_analise": "pendente", "fora_do_fluxo": "fora_do_fluxo"}
+
+
 def summary(resultado, requerente="MARIA SOUZA", **extra):
     return {"resultado": resultado, "requerente": requerente, "sei": "3516200.410.00000001-2026-01",
-            "sintese": "Viúvo(a), aposentadoria", "motivos": ["motivo"], **extra}
+            "sintese": "Viúvo(a), aposentadoria", "motivos": ["motivo"], "decisao": AI.get(resultado),
+            "origem_decisao": "ia", **extra}
 
 
 class Banco(unittest.TestCase):
@@ -29,13 +34,13 @@ class Banco(unittest.TestCase):
         versions = historico.versions("L", "P")
         self.assertEqual([(v["versao"], v["motivo"], v["resultado"]) for v in versions],
                          [(1, "leitura", "em_analise"), (2, "conferencia_manual", "enquadra")])
-        rows, _ = historico.search()
+        rows, _, _ = historico.search()
         self.assertEqual((rows[0]["versao"], rows[0]["resultado"]), (2, "enquadra"))
 
     def test_reprocessamento_mantem_o_ultimo_parecer(self):
         historico.upsert("L", "P", "lote.zip", "proc", summary("enquadra"), {"r": 1}, "a1", "leitura")
         historico.upsert("L", "P", "lote.zip", "proc", {"resultado": "processando"}, None, "a2", "reanalise")
-        rows, _ = historico.search(completo=True)
+        rows, _, _ = historico.search(completo=True)
         self.assertEqual((rows[0]["resultado"], rows[0]["parecer"]), ("processando", {"r": 1}))
 
     def test_busca_filtro_e_ordem(self):
@@ -43,11 +48,15 @@ class Banco(unittest.TestCase):
         historico.upsert("L", "B", "lote", "b", summary("nao_enquadra", "LEOMAR MOURA", renda_familiar_centavos=400000), {"b": 1}, "s", "x")
         historico.upsert("L", "C", "lote", "c", summary("em_analise", "NEUSA SICCHIEROLLI", renda_familiar_centavos=300000), {"c": 1}, "s", "x")
         self.assertEqual([r["processo_id"] for r in historico.search(q="rozeli")[0]], ["A"])
-        self.assertEqual({r["processo_id"] for r in historico.search(filtro="passaram")[0]}, {"A"})
+        self.assertEqual({r["processo_id"] for r in historico.search(filtro="aceitos")[0]}, {"A"})
+        self.assertEqual({r["processo_id"] for r in historico.search(filtro="nao_aceitos")[0]}, {"B"})
+        self.assertEqual({r["processo_id"] for r in historico.search(filtro="revisao_manual")[0]}, {"C"})
         self.assertEqual({r["processo_id"] for r in historico.search(filtro="nao_passaram")[0]}, {"B", "C"})
         self.assertEqual([r["processo_id"] for r in historico.search(ordem="renda", direcao="asc")[0]], ["A", "C", "B"])
-        _, totals = historico.search()
-        self.assertEqual(totals, {"enquadra": 1, "nao_enquadra": 1, "em_analise": 1})
+        _, totals, total = historico.search()
+        self.assertEqual(total, 3)
+        self.assertEqual((totals["todos"], totals["aceitos"], totals["nao_aceitos"], totals["revisao_manual"],
+                          totals["somente_ia"]), (3, 1, 1, 1, 3))
 
     def test_exclusao_registra_auditoria_sem_dados_pessoais(self):
         historico.upsert("L", "P", "lote", "proc", summary("enquadra"), {"cpf": "111"}, "s", "x")
@@ -95,7 +104,7 @@ class ExclusaoEExportacao(unittest.TestCase):
 
     def test_sincroniza_e_exporta(self):
         batch.sync_process(self.lot, self.p1, "leitura")
-        rows, _ = historico.search(completo=True)
+        rows, _, _ = historico.search(completo=True)
         document = rows[0]["parecer"]
         self.assertEqual(document["versao_formato"], historico.EXPORT_VERSION)
         self.assertEqual(document["processo"]["nome"], "SEI-1")
@@ -106,3 +115,83 @@ class ExclusaoEExportacao(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PaginacaoEPainel(unittest.TestCase):
+    def setUp(self):
+        historico.init(Path(tempfile.mkdtemp()) / "iptu.db")
+        results = ["enquadra"] * 5 + ["enquadra_conferir_cadastro"] * 40 + ["nao_enquadra"] * 30 + \
+                  ["em_analise"] * 20 + ["fora_do_fluxo"] * 5
+        for index, result in enumerate(results):
+            historico.upsert("L", f"P{index:04d}", "lote", f"proc-{index:04d}",
+                             {"resultado": result, "tempo_ms": 10000 + index * 100, "decisao": AI[result],
+                              "origem_decisao": "ia"}, {"i": index}, "s", "leitura")
+
+    def test_paginas(self):
+        first, _, total = historico.search(ordem="processo", direcao="asc", limite=25, pagina=1)
+        last, _, _ = historico.search(ordem="processo", direcao="asc", limite=25, pagina=4)
+        self.assertEqual(total, 100)
+        self.assertEqual((first[0]["processo"], last[-1]["processo"], len(last)), ("proc-0000", "proc-0099", 25))
+        self.assertEqual(historico.search(filtro="revisao_manual", limite=10)[2], 20)
+
+    def test_painel(self):
+        d = historico.dashboard()
+        self.assertEqual((d["processados"], d["aceitos"], d["aceitos_sem_ressalvas"], d["nao_aceitos"],
+                          d["revisao_manual"], d["fora_do_fluxo"]), (100, 45, 5, 30, 20, 5))
+        self.assertEqual(d["tempo_medio_ms"], 14950)
+        self.assertEqual(len(d["serie"]), 1)
+        self.assertEqual(d["serie"][0]["aceitos"], 45)
+
+
+class DecisaoHumana(unittest.TestCase):
+    def setUp(self):
+        historico.init(Path(tempfile.mkdtemp()) / "iptu.db")
+
+    def test_decisao_humana_prevalece_e_aparece_no_painel(self):
+        historico.upsert("L", "P", "lote", "3516200.410.00010901-2026-84",
+                         summary("nao_enquadra", sei="3516200.410.00010901-2026-84"), {"v": 1}, "s1", "leitura")
+        self.assertEqual(historico.dashboard()["nao_aceitos"], 1)
+        historico.upsert("L", "P", "lote", "3516200.410.00010901-2026-84",
+                         summary("nao_enquadra", sei="3516200.410.00010901-2026-84", decisao="deferido",
+                                 origem_decisao="revisao_humana", revisado_por="ana", decidido_em=1_800_000_000),
+                         {"v": 2}, "s2", "decisao_humana")
+        d = historico.dashboard()
+        self.assertEqual((d["aceitos"], d["nao_aceitos"], d["aceitos_com_revisao"], d["com_revisao_humana"]), (1, 0, 1, 1))
+        found = historico.find_by_sei("3516200.410.00010901/2026-84")
+        self.assertEqual((found["decisao"], found["origem_decisao"], found["revisado_por"]), ("deferido", "revisao_humana", "ana"))
+        self.assertIsNone(historico.find_by_sei("0000"))
+
+
+class ApiDeIntegracao(unittest.TestCase):
+    def setUp(self):
+        historico.init(Path(tempfile.mkdtemp()) / "iptu.db")
+        document = {"decisao_final": {"decisao_ia": "indeferido", "justificativa": "Renda do filho não compõe a renda familiar."},
+                    "parecer": {"exercicio": 2027, "parecer_texto": "PARECER…",
+                                "resumo": {"requerente": "MARIA SOUZA", "cpf": "111.222.333-44", "inscricao_imobiliaria": "01.2",
+                                           "modalidade": "aposentadoria", "renda_familiar_centavos": 162100, "sintese": "Viúvo(a)"},
+                                "criterios": [{"criterio": "renda", "status": "atendido", "motivo": "ok"}]}}
+        historico.upsert("L", "P", "lote", "3516200.410.00010901-2026-84",
+                         summary("nao_enquadra", sei="3516200.410.00010901-2026-84", cpf="111.222.333-44",
+                                 exercicio=2027, decisao="deferido", origem_decisao="revisao_humana",
+                                 revisado_por="ana", decidido_em=1_800_000_000), document, "s", "decisao_humana")
+        historico.upsert("L", "Q", "lote", "3516200.410.00010999-2026-11",
+                         summary("enquadra", sei="3516200.410.00010999-2026-11", cpf="111.222.333-44", exercicio=2027),
+                         {"parecer": {}}, "s", "leitura")
+
+    def test_resposta_do_processo(self):
+        view = historico.integration_view(historico.find_by_sei("3516200.410.00010901/2026-84"))
+        self.assertEqual((view["aceito"], view["decisao"], view["decisao_ia"], view["origem_decisao"], view["revisao_humana"]),
+                         (True, "deferido", "indeferido", "revisao_humana", True))
+        self.assertEqual(view["dados_do_aceite"]["renda_familiar_centavos"], 162100)
+        self.assertTrue(view["processado_em"] and view["decidido_em"])
+        self.assertEqual(view["possiveis_duplicidades"][0]["numero_sei"], "3516200.410.00010999-2026-11")
+
+    def test_mudancas_desde(self):
+        rows, total = historico.changed_since(0)
+        self.assertEqual(total, 2)
+        self.assertEqual({row["aceito"] for row in rows}, {True})
+
+    def test_filtro_de_duplicidades(self):
+        rows, totals, total = historico.search(filtro="duplicados")
+        self.assertEqual((total, totals["duplicados"]), (2, 2))
+        self.assertEqual(rows[0]["duplicidades"][0]["motivo"], "cpf")

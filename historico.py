@@ -18,13 +18,21 @@ from threading import Lock
 EXPORT_VERSION = 1
 PASSARAM = ("enquadra", "enquadra_conferir_cadastro")
 NAO_PASSARAM = ("nao_enquadra", "em_analise")
-FILTERS = {
-    "passaram": PASSARAM,
-    "nao_passaram": NAO_PASSARAM,
-    "fora_do_fluxo": ("fora_do_fluxo",),
-    "processando": ("processando",),
+# Decisão final: a da IA, ou a registrada por um servidor (que prevalece).
+DECISOES = ("deferido", "indeferido", "pendente", "fora_do_fluxo")
+FILTERS = {  # filtro -> (coluna, valores)
+    "aceitos": ("decisao", ("deferido",)),
+    "nao_aceitos": ("decisao", ("indeferido",)),
+    "revisao_manual": ("decisao", ("pendente",)),
+    "fora_do_fluxo": ("decisao", ("fora_do_fluxo",)),
+    "processando": ("resultado", ("processando",)),
+    "revisao_humana": ("origem_decisao", ("revisao_humana",)),
+    "somente_ia": ("origem_decisao", ("ia",)),
+    # nomes anteriores, mantidos para links e integrações já existentes
+    "passaram": ("resultado", PASSARAM),
+    "nao_passaram": ("resultado", NAO_PASSARAM),
 }
-SORTS = {"atualizado": "atualizado_em", "criado": "criado_em", "processo": "processo",
+SORTS = {"decisao": "decisao", "atualizado": "atualizado_em", "criado": "criado_em", "processo": "processo",
          "requerente": "requerente", "resultado": "resultado", "renda": "renda_centavos", "lote": "lote_nome"}
 _WRITE = Lock()
 _path = None
@@ -57,6 +65,16 @@ def init(path):
             CREATE TABLE IF NOT EXISTS auditoria (
                 registrado_em REAL, evento TEXT, lote_id TEXT, processo_id TEXT, sei TEXT, usuario TEXT);
         """)
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(processos)")}
+        for name, kind in (("tempo_ms", "INTEGER"), ("analisado_em", "REAL"), ("decisao", "TEXT"),
+                           ("origem_decisao", "TEXT"), ("revisado_por", "TEXT"), ("decidido_em", "REAL"),
+                           ("cpf_digitos", "TEXT"), ("conjuge_digitos", "TEXT"), ("inscricao_digitos", "TEXT"),
+                           ("sei_digitos", "TEXT"), ("exercicio", "INTEGER")):
+            if name not in columns:
+                db.execute(f"ALTER TABLE processos ADD COLUMN {name} {kind}")
+        db.execute("CREATE INDEX IF NOT EXISTS processos_analisado ON processos(analisado_em)")
+        for column in ("cpf_digitos", "conjuge_digitos", "inscricao_digitos", "sei_digitos"):
+            db.execute(f"CREATE INDEX IF NOT EXISTS processos_{column} ON processos({column}, exercicio)")
 
 
 def signature(*parts):
@@ -91,7 +109,9 @@ def upsert(lote_id, processo_id, lote_nome, processo, summary, report, assinatur
                        (lote_id, processo_id, version, now, motivo, summary.get("resultado"), body))
         changed = not current or current["hash"] != digest
         db.execute("""
-            INSERT INTO processos VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO processos (lote_id, processo_id, lote_nome, processo, sei, requerente, cpf, inscricao,
+                modalidade, renda_centavos, resultado, sintese, motivos, parecer, assinatura, hash, versao,
+                criado_em, atualizado_em) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(lote_id, processo_id) DO UPDATE SET
                 lote_nome=excluded.lote_nome, processo=excluded.processo, sei=excluded.sei,
                 requerente=excluded.requerente, cpf=excluded.cpf, inscricao=excluded.inscricao,
@@ -106,37 +126,183 @@ def upsert(lote_id, processo_id, lote_nome, processo, summary, report, assinatur
               summary.get("renda_familiar_centavos"), summary.get("resultado"), summary.get("sintese"),
               json.dumps(summary.get("motivos") or [], ensure_ascii=False), body, assinatura, digest, version,
               current["criado_em"] if current else now, now if changed else None))
+        if body:
+            digits = lambda value: "".join(ch for ch in str(value or "") if ch.isdigit()) or None  # noqa: E731
+            db.execute("UPDATE processos SET analisado_em=COALESCE(analisado_em, ?), tempo_ms=?, decisao=?, "
+                       "origem_decisao=?, revisado_por=?, decidido_em=?, cpf_digitos=?, conjuge_digitos=?, "
+                       "inscricao_digitos=?, sei_digitos=?, exercicio=? WHERE lote_id=? AND processo_id=?",
+                       (now, summary.get("tempo_ms"), summary.get("decisao"), summary.get("origem_decisao"),
+                        summary.get("revisado_por"), summary.get("decidido_em"), digits(summary.get("cpf")),
+                        digits(summary.get("cpf_conjuge")), digits(summary.get("inscricao")),
+                        digits(summary.get("sei") or processo), summary.get("exercicio"), lote_id, processo_id))
 
 
-def search(q="", filtro="", lote_id="", ordem="atualizado", direcao="desc", limite=500, completo=False):
+# Possível duplicidade no mesmo exercício: mesmo SEI (reenvio), mesmo CPF do requerente, CPF do requerente
+# igual ao do cônjuge declarado em outro processo, ou mesma inscrição imobiliária.
+_OTHER = "o.rowid != processos.rowid AND o.exercicio IS processos.exercicio"
+DUPLICATE_SQL = (
+    "(EXISTS (SELECT 1 FROM processos o WHERE " + _OTHER + " AND o.sei_digitos = processos.sei_digitos)"
+    " OR EXISTS (SELECT 1 FROM processos o WHERE " + _OTHER + " AND o.cpf_digitos = processos.cpf_digitos)"
+    " OR EXISTS (SELECT 1 FROM processos o WHERE " + _OTHER + " AND (o.conjuge_digitos = processos.cpf_digitos"
+    " OR o.cpf_digitos = processos.conjuge_digitos))"
+    " OR EXISTS (SELECT 1 FROM processos o WHERE " + _OTHER + " AND o.inscricao_digitos = processos.inscricao_digitos))")
+DUPLICATE_REASONS = {
+    "sei": "mesmo número SEI enviado em outro lote",
+    "cpf": "mesmo CPF do requerente em outro processo",
+    "conjuge": "CPF do requerente aparece como cônjuge em outro processo (ou vice-versa)",
+    "inscricao": "mesma inscrição imobiliária em outro processo",
+}
+
+
+def duplicates(db, rows):
+    """Para cada linha, os processos relacionados e o motivo da possível duplicidade."""
+    found = {}
+    for row in rows:
+        key = (row["lote_id"], row["processo_id"])
+        me = db.execute("SELECT rowid, sei_digitos, cpf_digitos, conjuge_digitos, inscricao_digitos, exercicio "
+                        "FROM processos WHERE lote_id=? AND processo_id=?", key).fetchone()
+        if me is None:
+            continue
+        checks = (("sei", "o.sei_digitos = ?", (me["sei_digitos"],)),
+                  ("cpf", "o.cpf_digitos = ?", (me["cpf_digitos"],)),
+                  ("conjuge", "(o.conjuge_digitos = ? OR o.cpf_digitos = ?)", (me["cpf_digitos"], me["conjuge_digitos"])),
+                  ("inscricao", "o.inscricao_digitos = ?", (me["inscricao_digitos"],)))
+        related = []
+        for reason, condition, values in checks:
+            if not any(values):
+                continue
+            for other in db.execute(
+                    f"SELECT o.lote_id, o.processo_id, o.processo, o.sei, o.requerente, o.decisao, o.lote_nome "
+                    f"FROM processos o WHERE o.rowid != ? AND o.exercicio IS ? AND {condition}",
+                    (me["rowid"], me["exercicio"], *values)):
+                related.append({**dict(other), "motivo": reason, "descricao": DUPLICATE_REASONS[reason]})
+        if related:
+            found[key] = related
+    return found
+
+
+def _filters(q="", filtro="", lote_id=""):
     where, args = [], []
     if q:
-        like = "%" + q.strip().lower() + "%"
         where.append("(lower(coalesce(processo,'')||' '||coalesce(sei,'')||' '||coalesce(requerente,'')||' '||"
                      "coalesce(cpf,'')||' '||coalesce(inscricao,'')||' '||coalesce(sintese,'')||' '||"
                      "coalesce(motivos,'')||' '||coalesce(lote_nome,'')) LIKE ?)")
-        args.append(like)
+        args.append("%" + q.strip().lower() + "%")
     if filtro in FILTERS:
-        values = FILTERS[filtro]
-        where.append(f"resultado IN ({','.join('?' * len(values))})")
+        column, values = FILTERS[filtro]
+        where.append(f"{column} IN ({','.join('?' * len(values))})")
         args += list(values)
+    if filtro == "duplicados":
+        where.append(DUPLICATE_SQL)
     if lote_id:
         where.append("lote_id = ?")
         args.append(lote_id)
+    return ("WHERE " + " AND ".join(where)) if where else "", args
+
+
+def search(q="", filtro="", lote_id="", ordem="atualizado", direcao="desc", limite=500, completo=False, pagina=1):
+    """Processos filtrados, ordenados e paginados. Retorna (linhas, totais por resultado, total filtrado)."""
+    clause, args = _filters(q, filtro, lote_id)
     column = SORTS.get(ordem, "atualizado_em")
     direction = "ASC" if direcao == "asc" else "DESC"
+    limit = max(1, min(int(limite), 100000))
+    offset = (max(1, int(pagina)) - 1) * limit
     fields = "*" if completo else "lote_id, processo_id, lote_nome, processo, sei, requerente, cpf, inscricao, " \
-                                  "modalidade, renda_centavos, resultado, sintese, motivos, versao, criado_em, atualizado_em"
-    sql = (f"SELECT {fields} FROM processos {'WHERE ' + ' AND '.join(where) if where else ''} "
-           f"ORDER BY {column} IS NULL, {column} {direction}, processo LIMIT ?")
+                                  "modalidade, renda_centavos, resultado, sintese, motivos, versao, criado_em, " \
+                                  "atualizado_em, analisado_em, tempo_ms, decisao, origem_decisao, revisado_por, decidido_em"
+    sql = (f"SELECT {fields} FROM processos {clause} "
+           f"ORDER BY {column} IS NULL, {column} {direction}, processo LIMIT ? OFFSET ?")
+    lot_clause, lot_args = _filters(lote_id=lote_id)
     with closing(connect()) as db:
-        rows = [dict(row) for row in db.execute(sql, [*args, max(1, min(int(limite), 100000))])]
-        totals = {key: count for key, count in db.execute("SELECT resultado, count(*) FROM processos GROUP BY resultado")}
+        rows = [dict(row) for row in db.execute(sql, [*args, limit, offset])]
+        total = db.execute(f"SELECT count(*) FROM processos {clause}", args).fetchone()[0]
+        totals = {}
+        for decision, result, origin, count in db.execute(
+                f"SELECT decisao, resultado, origem_decisao, count(*) FROM processos {lot_clause} "
+                f"GROUP BY decisao, resultado, origem_decisao", lot_args):
+            for name, (column, values) in FILTERS.items():
+                value = {"decisao": decision, "resultado": result, "origem_decisao": origin}[column]
+                if value in values:
+                    totals[name] = totals.get(name, 0) + count
+            totals["todos"] = totals.get("todos", 0) + count
+        related = duplicates(db, rows)
+        totals["duplicados"] = db.execute(
+            f"SELECT count(*) FROM processos {lot_clause}{' AND' if lot_clause else ' WHERE'} {DUPLICATE_SQL}",
+            lot_args).fetchone()[0]
     for row in rows:
         row["motivos"] = json.loads(row["motivos"] or "[]")
+        row["duplicidades"] = related.get((row["lote_id"], row["processo_id"]), [])
         if completo:
             row["parecer"] = json.loads(row["parecer"]) if row.get("parecer") else None
-    return rows, totals
+    return rows, totals, total
+
+
+def dashboard(lote_id="", dias=14):
+    """Indicadores pela decisão final: totais, origem (IA ou revisão humana), tempo e série diária."""
+    clause, args = _filters(lote_id=lote_id)
+    since = time.time() - dias * 86400
+    with closing(connect()) as db:
+        counts = db.execute(f"SELECT decisao, resultado, origem_decisao, count(*) AS n FROM processos {clause} "
+                            f"GROUP BY decisao, resultado, origem_decisao", args).fetchall()
+        timing = db.execute(f"SELECT avg(tempo_ms) FROM processos {clause}"
+                            f"{' AND' if clause else ' WHERE'} tempo_ms IS NOT NULL", args).fetchone()
+        series = db.execute(
+            f"SELECT date(analisado_em, 'unixepoch', 'localtime') AS dia, decisao, count(*) AS n, "
+            f"avg(tempo_ms) AS tempo FROM processos {clause}{' AND' if clause else ' WHERE'} analisado_em >= ? "
+            f"GROUP BY dia, decisao ORDER BY dia", [*args, since]).fetchall()
+    report = {"processados": 0, "aceitos": 0, "aceitos_sem_ressalvas": 0, "aceitos_conferir_cadastro": 0,
+              "aceitos_por_ia": 0, "aceitos_com_revisao": 0, "nao_aceitos": 0, "revisao_manual": 0,
+              "fora_do_fluxo": 0, "processando": 0, "com_revisao_humana": 0, "somente_ia": 0}
+    names = {"deferido": "aceitos", "indeferido": "nao_aceitos", "pendente": "revisao_manual",
+             "fora_do_fluxo": "fora_do_fluxo"}
+    for decision, result, origin, count in counts:
+        if result == "processando" and decision is None:
+            report["processando"] += count
+            continue
+        report["processados"] += count
+        if decision in names:
+            report[names[decision]] += count
+        report["com_revisao_humana" if origin == "revisao_humana" else "somente_ia"] += count
+        if decision == "deferido":
+            report["aceitos_com_revisao" if origin == "revisao_humana" else "aceitos_por_ia"] += count
+            if origin != "revisao_humana" and result == "enquadra":
+                report["aceitos_sem_ressalvas"] += count
+            elif origin != "revisao_humana":
+                report["aceitos_conferir_cadastro"] += count
+    days = {}
+    for day, decision, count, average in series:
+        entry = days.setdefault(day, {"dia": day, "aceitos": 0, "nao_aceitos": 0, "revisao_manual": 0,
+                                      "fora_do_fluxo": 0, "_t": 0.0, "_n": 0})
+        if decision in names:
+            entry[names[decision]] += count
+        if average is not None:
+            entry["_t"] += average * count
+            entry["_n"] += count
+    report["serie"] = []
+    for entry in sorted(days.values(), key=lambda item: item["dia"]):
+        entry["tempo_medio_ms"] = round(entry.pop("_t") / entry["_n"]) if entry["_n"] else None
+        entry.pop("_n")
+        report["serie"].append(entry)
+    report["tempo_medio_ms"] = round(timing[0]) if timing[0] is not None else None
+    report["dias"] = dias
+    return report
+
+
+def find_by_sei(sei):
+    """Processo mais recente com esse número SEI (aceita com / ou -), com o documento completo."""
+    key = "".join(ch for ch in sei if ch.isdigit())
+    if not key:
+        return None
+    with closing(connect()) as db:
+        for row in db.execute("SELECT lote_id, processo_id, sei, processo FROM processos "
+                              "WHERE parecer IS NOT NULL ORDER BY atualizado_em DESC"):
+            if any(value and "".join(ch for ch in value if ch.isdigit()) == key for value in (row["sei"], row["processo"])):
+                found = dict(db.execute("SELECT * FROM processos WHERE lote_id=? AND processo_id=?",
+                                        (row["lote_id"], row["processo_id"])).fetchone())
+                found["parecer"] = json.loads(found["parecer"])
+                found["duplicidades"] = duplicates(db, [found]).get((found["lote_id"], found["processo_id"]), [])
+                return found
+    return None
 
 
 def versions(lote_id, processo_id, with_body=False):
@@ -172,3 +338,59 @@ def delete(lote_id, processo_id, sei=None, usuario=None, evento="excluido"):
 def audit(limite=200):
     with closing(connect()) as db:
         return [dict(row) for row in db.execute("SELECT * FROM auditoria ORDER BY registrado_em DESC LIMIT ?", (limite,))]
+
+
+def _iso(seconds):
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(seconds)) if seconds else None
+
+
+def integration_view(row):
+    """Resposta da API de integração: aceite, dados do aceite, datas e origem da decisão."""
+    document = row["parecer"] if isinstance(row.get("parecer"), dict) else (json.loads(row["parecer"]) if row.get("parecer") else {})
+    report = document.get("parecer") or {}
+    resumo = report.get("resumo") or {}
+    final = document.get("decisao_final") or {}
+    decision = row.get("decisao") or final.get("decisao")
+    return {
+        "versao_formato": EXPORT_VERSION,
+        "numero_sei": row.get("sei") or (document.get("processo") or {}).get("numero_sei"),
+        "processo": row.get("processo"),
+        "aceito": True if decision == "deferido" else False if decision == "indeferido" else None,
+        "decisao": decision or ("processando" if row.get("resultado") == "processando" else None),
+        "decisao_ia": final.get("decisao_ia"),
+        "origem_decisao": row.get("origem_decisao") or "ia",
+        "revisao_humana": (row.get("origem_decisao") == "revisao_humana"),
+        "revisado_por": row.get("revisado_por"),
+        "justificativa": final.get("justificativa"),
+        "processado_em": _iso(row.get("analisado_em")),
+        "decidido_em": _iso(row.get("decidido_em")) or _iso(row.get("analisado_em")),
+        "atualizado_em": _iso(row.get("atualizado_em")),
+        "dados_do_aceite": {
+            "requerente": resumo.get("requerente"), "cpf": resumo.get("cpf"),
+            "inscricao_imobiliaria": resumo.get("inscricao_imobiliaria"), "modalidade": resumo.get("modalidade"),
+            "renda_familiar_centavos": resumo.get("renda_familiar_centavos"), "exercicio": report.get("exercicio"),
+            "sintese": resumo.get("sintese"),
+            "fundamentos": [{"criterio": item["criterio"], "situacao": item["status"], "motivo": item["motivo"]}
+                            for item in report.get("criterios") or []],
+        },
+        "parecer_texto": report.get("parecer_texto"),
+        "possiveis_duplicidades": [{"numero_sei": item.get("sei") or item.get("processo"), "motivo": item["descricao"],
+                                    "decisao": item.get("decisao")} for item in row.get("duplicidades") or []],
+    }
+
+
+def changed_since(since, decisao="", pagina=1, por_pagina=100):
+    where, args = ["parecer IS NOT NULL", "coalesce(atualizado_em, criado_em) >= ?"], [since]
+    if decisao in DECISOES:
+        where.append("decisao = ?")
+        args.append(decisao)
+    clause = "WHERE " + " AND ".join(where)
+    with closing(connect()) as db:
+        total = db.execute(f"SELECT count(*) FROM processos {clause}", args).fetchone()[0]
+        rows = [dict(row) for row in db.execute(
+            f"SELECT * FROM processos {clause} ORDER BY coalesce(atualizado_em, criado_em), processo LIMIT ? OFFSET ?",
+            [*args, por_pagina, (pagina - 1) * por_pagina])]
+        related = duplicates(db, rows)
+        for row in rows:
+            row["duplicidades"] = related.get((row["lote_id"], row["processo_id"]), [])
+    return [integration_view(row) for row in rows], total

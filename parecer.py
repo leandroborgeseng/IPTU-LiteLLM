@@ -721,10 +721,10 @@ def write_opinion(result):
         end = ("Conclusão: o processo não trata de isenção de IPTU para aposentado, pensionista ou BPC "
                "(LC 456/2025) e deve seguir o fluxo próprio do assunto.")
     elif outcome == "nao_enquadra":
-        end = (f"Conclusão: o pedido NÃO se enquadra nos requisitos da LC 456/2025. Opina-se pelo "
+        end = (f"Conclusão: o pedido NÃO se enquadra nos requisitos da LC 456/2025 (não aceito). Opina-se pelo "
                f"INDEFERIMENTO da isenção, pelos seguintes motivos: " + " ".join(result["motivos_indeferimento"]))
     elif outcome == "em_analise":
-        end = ("Conclusão: os documentos não permitem decidir. O processo permanece EM ANÁLISE até a "
+        end = ("Conclusão: os documentos não permitem decidir. O processo segue para REVISÃO MANUAL, com a "
                "conferência dos itens pendentes: " + " ".join(result["pendencias"]))
     elif outcome == "enquadra_conferir_cadastro":
         end = ("Conclusão: pelos documentos apresentados, o pedido se enquadra nos requisitos da LC 456/2025. "

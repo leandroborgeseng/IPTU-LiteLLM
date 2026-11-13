@@ -57,6 +57,42 @@ RENDER_SLOTS = BoundedSemaphore(int(os.environ.get("IPTU_RENDER_WORKERS", "0") o
                                 or max(1, available_cpus() - 1))
 NICE = ["nice", "-n", "15"] if shutil.which("nice") else []
 UPLOAD_LOCKS = {}
+IMPORT_LOCKS = {}  # um lote é separado em processos uma única vez, por uma única thread
+PAGE_SLOTS = None  # vagas de leitura compartilhadas por todos os lotes em andamento
+
+
+def lot_lock(name):
+    with LOCK:
+        return IMPORT_LOCKS.setdefault(name, Lock())
+
+
+def max_parallel_lots():
+    try:
+        return max(1, min(16, int(os.environ.get("IPTU_LOTES_SIMULTANEOS", "3"))))
+    except ValueError:
+        return 3
+
+
+def import_lot(path):
+    """Separa o lote em processos (manifest) assim que o envio termina, sem esperar a vez de leitura."""
+    with lot_lock(path.name):
+        manifest = path / "manifest.json"
+        if manifest.exists():
+            return load(manifest)
+        state = load(path / "batch.json")
+        state["etapa"] = "separando"
+        save(path / "batch.json", state)
+        processes = inventory(path, state["nome"])
+        save(manifest, processes)
+        # Os arquivos já foram extraídos: o ZIP enviado (≈1 GB por lote) deixa de ser necessário.
+        if (path / "upload").exists() and Path(state["nome"]).suffix.lower() == ".zip":
+            (path / "upload").unlink(missing_ok=True)
+        state = load(path / "batch.json")
+        state.pop("etapa", None)
+        state["processos"] = len(processes)
+        state["documentos"] = sum(1 for item in processes for doc in item["arquivos"] if doc["id"])
+        save(path / "batch.json", state)
+        return processes
 KINDS = ("requerimento", "identidade", "cpf", "residencia", "beneficio", "posse",
          "procuracao", "certidao", "laudo", "holerite", "execucao_fiscal",
          "peticao_judicial", "despacho", "capa", "carnê_iptu", "imunidade_tributaria", "outro")
@@ -568,10 +604,9 @@ def process_batch(path, analyze):
     }
     batch_started = time.monotonic()
     save(path / "batch.json", state)
-    manifest = path / "manifest.json"
-    if not manifest.exists():
-        save(manifest, inventory(path, state["nome"]))
-    processes = load(manifest)
+    processes = import_lot(path)
+    state["processos"] = len(processes)
+    state["documentos"] = sum(1 for item in processes for doc in item["arquivos"] if doc["id"])
     # 1) Conta as páginas de todos os documentos. 2) Uma única fila paralela atende
     # todos os processos do lote, na ordem dos processos; cada processo é marcado
     # como concluído assim que suas páginas terminam, e o parecer já fica disponível.
@@ -626,7 +661,10 @@ def process_batch(path, analyze):
         save(path / "batch.json", state)
         pool = ThreadPoolExecutor(max_workers=workers)
         try:
-            jobs = {pool.submit(process_page, pdf, number, evidence, analyze, extension): key
+            def slotted(*job):
+                with PAGE_SLOTS:
+                    return process_page(*job)
+            jobs = {pool.submit(slotted, pdf, number, evidence, analyze, extension): key
                     for key, items in jobs_by_process.items()
                     for pdf, number, evidence, extension in items}
             for job in as_completed(jobs):
@@ -658,47 +696,89 @@ def process_batch(path, analyze):
     save(path / "batch.json", state)
 
 
+def failure_reason(exc):
+    return ("zip_invalido" if isinstance(exc, zipfile.BadZipFile)
+            else str(exc) if str(exc) in {"espaco_insuficiente", "limite_de_entradas", "limite_de_extracao"}
+            else "falha_de_importacao")
+
+
+def mark_failed(meta, exc):
+    print(f"Falha no lote {meta.parent.name}: {type(exc).__name__}: {exc}", flush=True)
+    try:
+        state = load(meta)
+        state["status"] = "falha"
+        state["motivo"] = failure_reason(exc)
+        state.pop("etapa", None)
+        save(meta, state)
+    except OSError as error:
+        print(f"Falha ao salvar status do lote {meta.parent.name}: {type(error).__name__}", flush=True)
+
+
+def queued_lots(statuses):
+    lots = []
+    for meta in ROOT.glob("*/batch.json"):
+        try:
+            state = load(meta)
+        except (OSError, ValueError):
+            continue
+        if state.get("status") in statuses:
+            lots.append((state.get("criado", 0), meta))
+    return [meta for _, meta in sorted(lots)]
+
+
+def run_importer():
+    """Separa em processos os lotes que chegam, em paralelo à leitura dos anteriores."""
+    while True:
+        if not reset_pending():
+            for meta in queued_lots({"na_fila"}):
+                if reset_pending():
+                    break
+                if not (meta.parent / "manifest.json").exists():
+                    try:
+                        import_lot(meta.parent)
+                    except ResetRequested:
+                        break
+                    except Exception as exc:
+                        mark_failed(meta, exc)
+        time.sleep(2)
+
+
 def run_worker(analyze):
+    global PAGE_SLOTS
+    PAGE_SLOTS = BoundedSemaphore(page_workers())
     print(f"Worker: {available_cpus()} CPU(s) no container; renderização em até "
-          f"{RENDER_SLOTS._initial_value} página(s) por vez; {page_workers()} página(s) em leitura paralela.",
-          flush=True)
+          f"{RENDER_SLOTS._initial_value} página(s) por vez; {page_workers()} página(s) em leitura paralela; "
+          f"até {max_parallel_lots()} lote(s) ao mesmo tempo.", flush=True)
+    Thread(target=run_importer, daemon=True).start()
+    active = {}
+
+    def run_lot(meta):
+        try:
+            process_batch(meta.parent, analyze)
+        except ResetRequested:
+            pass
+        except Exception as exc:
+            mark_failed(meta, exc)
+
     while True:
         WAKE.clear()
+        active = {name: thread for name, thread in active.items() if thread.is_alive()}
         if reset_pending():
-            try:
-                clear_batches()
-            except OSError as error:
-                print(f"Falha ao limpar lotes: {type(error).__name__}", flush=True)
-                WAKE.wait(3)
-            continue
-        for meta in ROOT.glob("*/batch.json"):
-            if reset_pending():
-                break
-            try:
-                state = load(meta)
-            except (OSError, ValueError) as error:
-                print(f"Falha ao carregar lote {meta.parent.name}: {type(error).__name__}", flush=True)
-                continue
-            if state["status"] not in {"na_fila", "processando"}:
-                continue
-            try:
-                process_batch(meta.parent, analyze)
-            except ResetRequested:
-                break
-            except Exception as exc:
-                print(f"Falha no lote {meta.parent.name}: {type(exc).__name__}", flush=True)
-                state["status"] = "falha"
-                state["motivo"] = (
-                    "zip_invalido" if isinstance(exc, zipfile.BadZipFile)
-                    else str(exc) if str(exc) in {"espaco_insuficiente", "limite_de_entradas"}
-                    else "falha_de_importacao"
-                )
+            if not active:
                 try:
-                    save(meta, state)
+                    clear_batches()
                 except OSError as error:
-                    print(f"Falha ao salvar status do lote {meta.parent.name}: {type(error).__name__}", flush=True)
-        if not reset_pending():
+                    print(f"Falha ao limpar lotes: {type(error).__name__}", flush=True)
             WAKE.wait(3)
+            continue
+        for meta in queued_lots({"na_fila", "processando"}):
+            if len(active) >= max_parallel_lots():
+                break
+            if meta.parent.name not in active:
+                thread = Thread(target=run_lot, args=(meta,), daemon=True)
+                active[meta.parent.name] = thread
+                thread.start()
+        WAKE.wait(3)
 
 
 def start_worker(analyze):
@@ -895,9 +975,30 @@ def export_document(path, detail):
         "processo": {"id": detail["id"], "nome": detail["processo"], "numero_sei": detail.get("numero_processo_sei"),
                      "arquivos": [{"origem": item["origem"], "erro": item["erro"]} for item in detail["arquivos"]]},
         "resultado": report["resultado"],
+        "decisao_final": final_decision(detail) if detail["status"] == "em_revisao" else None,
         "parecer": report,
         "conferencia_manual": detail.get("revisao"),
         "cadastro_sil": detail.get("cadastro_sil"),
+    }
+
+
+AI_DECISION = {"enquadra": "deferido", "enquadra_conferir_cadastro": "deferido", "nao_enquadra": "indeferido",
+               "em_analise": "pendente", "fora_do_fluxo": "fora_do_fluxo"}
+
+
+def final_decision(detail):
+    """Decisão final: a do servidor, se registrada; senão a proposta da IA. Indica a origem."""
+    report = detail["parecer"]
+    review = detail.get("revisao") or {}
+    human = review.get("decisao") or None
+    return {
+        "decisao": human["resultado"] if human else AI_DECISION.get(report["resultado"], "pendente"),
+        "decisao_ia": AI_DECISION.get(report["resultado"], "pendente"),
+        "origem_decisao": "revisao_humana" if review else "ia",
+        "revisado_por": (human or {}).get("usuario") or review.get("usuario"),
+        "decidido_em": (human or {}).get("registrada_em") or review.get("registrada_em"),
+        "justificativa": (human or {}).get("justificativa"),
+        "decisao_humana_alterou_ia": bool(human) and human["resultado"] != AI_DECISION.get(report["resultado"]),
     }
 
 
@@ -906,10 +1007,14 @@ def summary_of(detail):
     if detail["status"] != "em_revisao":
         return {"resultado": "processando", "sei": detail.get("numero_processo_sei")}
     resumo = report["resumo"]
-    return {"sei": report["numero_processo_sei"], "resultado": report["resultado"],
+    work = sum(sum((row.get("tempos_ms") or {}).values()) for row in detail["paginas"])
+    return {**final_decision(detail),
+            "sei": report["numero_processo_sei"], "resultado": report["resultado"], "tempo_ms": work or None,
             "requerente": resumo.get("requerente"), "cpf": resumo.get("cpf"),
             "inscricao": resumo.get("inscricao_imobiliaria"), "modalidade": resumo.get("modalidade"),
             "renda_familiar_centavos": resumo.get("renda_familiar_centavos"), "sintese": resumo.get("sintese"),
+            "exercicio": report.get("exercicio"),
+            "cpf_conjuge": next(iter({item["valor"] for item in report["fatos_do_requerimento"].get("cpf_conjuge", [])}), None),
             "motivos": report["motivos_indeferimento"] or report["pendencias"]
             or [row["motivo"] for row in report["criterios"] if row["status"] == "fora_do_fluxo"]
             or report["conferencias_cadastrais"]}
@@ -975,3 +1080,36 @@ def delete_process(path, process_id):
         else:
             shutil.rmtree(path, ignore_errors=True)
         return 200, {"status": "excluido", "processo": item["processo"]}
+
+
+def throughput(lote_id=""):
+    """Processos por hora de leitura, a partir da duração registrada de cada lote."""
+    processes = seconds = 0
+    for meta in ROOT.glob("*/batch.json"):
+        if lote_id and meta.parent.name != lote_id:
+            continue
+        try:
+            state = load(meta)
+            manifest = load(meta.parent / "manifest.json") if (meta.parent / "manifest.json").exists() else []
+        except (OSError, ValueError):
+            continue
+        duration = (state.get("desempenho") or {}).get("duracao_ms") or 0
+        if state.get("status") == "concluido" and duration > 0 and manifest:
+            processes += len(manifest)
+            seconds += duration / 1000
+    return round(processes / (seconds / 3600), 1) if seconds else None
+
+
+def lots_overview():
+    """Estado de cada lote enviado, para o painel mostrar onde cada envio está."""
+    rows = []
+    for meta in ROOT.glob("*/batch.json"):
+        try:
+            state = describe(meta.parent)
+        except (OSError, ValueError):
+            continue
+        rows.append({key: state.get(key) for key in ("id", "nome", "status", "etapa", "motivo", "bytes", "recebido",
+                                                       "criado", "processos", "documentos", "progresso")}
+                    | {"duracao_ms": (state.get("desempenho") or {}).get("duracao_ms")})
+    rows.sort(key=lambda row: row.get("criado") or 0, reverse=True)
+    return {"lotes": rows, "lotes_simultaneos": max_parallel_lots(), "paginas_em_paralelo": page_workers()}

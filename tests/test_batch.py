@@ -109,3 +109,22 @@ class Reanalise(unittest.TestCase):
     def test_envio_incompleto_nao_reanalisa(self):
         self.state("recebendo")
         self.assertEqual(batch.request_rerun(self.dir)[0], 409)
+
+
+class SeparacaoImediata(unittest.TestCase):
+    def test_lote_e_separado_e_o_zip_enviado_e_descartado(self):
+        path = Path(tempfile.mkdtemp()) / ("f" * 32)
+        path.mkdir()
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            for n in range(3):
+                archive.writestr(f"Lote/3516200.410.0001090{n}-2026-21/req.pdf", b"%PDF-1.4")
+        (path / "upload").write_bytes(buffer.getvalue())
+        batch.save(path / "batch.json", {"id": path.name, "nome": "Lote.zip", "bytes": len(buffer.getvalue()),
+                                         "status": "na_fila", "criado": 1})
+        processes = batch.import_lot(path)
+        state = batch.load(path / "batch.json")
+        self.assertEqual((len(processes), state["processos"], state["status"]), (3, 3, "na_fila"))
+        self.assertNotIn("etapa", state)
+        self.assertFalse((path / "upload").exists())
+        self.assertEqual(batch.import_lot(path), processes)  # segunda chamada não refaz

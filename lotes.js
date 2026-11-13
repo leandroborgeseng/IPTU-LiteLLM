@@ -3,12 +3,20 @@ const $ = (id) => document.getElementById(id);
 const api = '/api/lotes';
 const RESUME_KEY = 'iptu-upload-pendente';
 const ACCEPTED = /\.(pdf|zip|jpe?g|png|webp|html?)$/i;
+// Rótulos de exibição. Os códigos internos (enquadra, em_analise…) ficam inalterados na exportação.
 const RESULT = {
-  enquadra: 'Enquadra', enquadra_conferir_cadastro: 'Enquadra · conferir cadastro',
-  nao_enquadra: 'Não enquadra', em_analise: 'Em análise', fora_do_fluxo: 'Fora do fluxo',
-  processando: 'Processando', erro: 'Erro de leitura',
+  enquadra: 'Aceito', enquadra_conferir_cadastro: 'Aceito · conferir cadastro', nao_enquadra: 'Não aceito',
+  em_analise: 'Revisão manual', fora_do_fluxo: 'Fora do fluxo', processando: 'Processando', erro: 'Erro de leitura',
 };
+const DECISION = {deferido: 'Aceito', indeferido: 'Não aceito', pendente: 'Revisão manual',
+  fora_do_fluxo: 'Fora do fluxo', processando: 'Processando'};
+const DECISION_ICON = {deferido: ['✓', 'i-good'], indeferido: ['✕', 'i-critical'], pendente: ['!', 'i-warning'],
+  fora_do_fluxo: ['→', 'i-neutral'], processando: ['…', 'i-neutral']};
+const AI_TO_DECISION = {enquadra: 'deferido', enquadra_conferir_cadastro: 'deferido', nao_enquadra: 'indeferido',
+  em_analise: 'pendente', fora_do_fluxo: 'fora_do_fluxo', processando: 'processando'};
 const MARK = {atendido: '✓', impedimento: '✕', pendente: '!', cadastral: '○', aviso: 'i', fora_do_fluxo: '→'};
+const MARK_CLASS = {atendido: 'i-good', impedimento: 'i-critical', pendente: 'i-warning', cadastral: 'i-neutral',
+  aviso: 'i-neutral', fora_do_fluxo: 'i-neutral'};
 const LABEL = {
   modalidade: 'Modalidade', identidade: 'Identificação', beneficio: 'Benefício', renda: 'Renda familiar',
   residencia: 'Residência', 'edícula': 'Edícula e uso', imovel: 'Vínculo com o imóvel', unicidade: 'Imóvel único',
@@ -16,10 +24,18 @@ const LABEL = {
   dupla_leitura: 'Dupla leitura do requerimento',
   processo_sei: 'Processo SEI', leitura: 'Leitura', processamento: 'Processamento', requerimento: 'Requerimento',
 };
-let currentBatch = '';
+let currentBatch = '';   // filtro de lote da tabela (cabeçalho)
+let trackedBatch = '';   // lote cujo progresso aparece na área de envio
 let currentProcess = '';
 let detailBatch = '';
+let detailData = null;
 let uploading = false;
+
+function badge(decision, text) {
+  const [icon, cls] = DECISION_ICON[decision] || ['·', 'i-neutral'];
+  return el('span', {class: 'badge b-' + decision}, el('span', {class: 'icon ' + cls, 'aria-hidden': 'true'}, icon),
+    text || DECISION[decision] || decision);
+}
 
 async function request(path, options) {
   const response = await fetch(path, options);
@@ -53,7 +69,7 @@ function step(name, text, value) {
   }
   if (name === 'pronto') document.querySelector('[data-step="pronto"]').className = 'done';
   $('job-text').textContent = text;
-  if (value != null) $('progress').value = value;
+  if (value != null) $('progress-bar').style.width = Math.round(100 * Math.min(1, Math.max(0, value))) + '%';
 }
 
 /* ---------- Pasta → lista de arquivos ---------- */
@@ -302,7 +318,9 @@ async function start(items, label) {
     const id = await send(blob, name, key);
     step('ler', 'Lendo os documentos no servidor…', 0);
     await refreshBatches();
-    selectBatch(id);
+    trackedBatch = id;
+    refreshLots();
+    refreshTable();
   } catch (error) {
     step('enviar', 'Falha: ' + error.message + '. Selecione a mesma pasta para retomar o envio.');
   } finally {
@@ -337,18 +355,189 @@ drop.ondrop = async (event) => {
   start(items, label);
 };
 
-/* ---------- Lotes (progresso) e histórico de processos (todos os lotes) ---------- */
-const view = {q: '', filtro: '', ordem: 'atualizado', direcao: 'desc'};
-const FILTROS = [['', 'Todos'], ['passaram', 'Passaram'], ['nao_passaram', 'Não passaram'],
-  ['fora_do_fluxo', 'Fora do fluxo'], ['processando', 'Processando']];
-const GRUPOS = {passaram: ['enquadra', 'enquadra_conferir_cadastro'], nao_passaram: ['nao_enquadra', 'em_analise'],
-  fora_do_fluxo: ['fora_do_fluxo'], processando: ['processando']};
+/* ---------- Painel: indicadores e gráficos ---------- */
+const SVGNS = 'http://www.w3.org/2000/svg';
+const STATUS_FILL = {aceitos: 'var(--good)', nao_aceitos: 'var(--critical)', revisao_manual: 'var(--warning)',
+  fora_do_fluxo: 'var(--neutral)'};
+const STATUS_NAME = {aceitos: 'Aceito', nao_aceitos: 'Não aceito', revisao_manual: 'Revisão manual', fora_do_fluxo: 'Fora do fluxo'};
 
-function query(extra = {}) {
-  const params = new URLSearchParams({q: view.q, filtro: view.filtro, ordem: view.ordem, direcao: view.direcao, ...extra});
-  if (currentBatch) params.set('lote', currentBatch);
-  return params.toString();
+function svg(tag, attrs = {}, ...children) {
+  const node = document.createElementNS(SVGNS, tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if ((key === 'fill' || key === 'stroke') && String(value).startsWith('var(')) node.style[key] = value;
+    else node.setAttribute(key, value);
+  }
+  node.append(...children.filter(Boolean));
+  return node;
 }
+function number(value) { return value == null ? '—' : value.toLocaleString('pt-BR'); }
+function seconds(ms) {
+  if (ms == null) return '—';
+  const s = ms / 1000;
+  return s < 90 ? s.toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' s'
+    : (s / 60).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' min';
+}
+function lastDays(count) {
+  const days = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    days.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
+  }
+  return days;
+}
+function dayLabel(day) { const [, m, d] = day.split('-'); return d + '/' + m; }
+function niceMax(value) {
+  if (value <= 4) return 4;
+  const step = Math.pow(10, Math.floor(Math.log10(value)));
+  return Math.ceil(value / step) * step;
+}
+function tooltip(container) {
+  let tip = container.querySelector('.tooltip');
+  if (!tip) { tip = el('div', {class: 'tooltip', role: 'status'}); container.append(tip); }
+  return tip;
+}
+
+function drawVolume(serie, days) {
+  const box = $('chart-volume');
+  const byDay = Object.fromEntries(serie.map((row) => [row.dia, row]));
+  const rows = days.map((day) => byDay[day] || {dia: day, aceitos: 0, nao_aceitos: 0, revisao_manual: 0, fora_do_fluxo: 0});
+  const keys = ['aceitos', 'nao_aceitos', 'revisao_manual', 'fora_do_fluxo'];
+  const totals = rows.map((row) => keys.reduce((sum, key) => sum + row[key], 0));
+  if (!totals.some(Boolean)) {
+    box.replaceChildren(el('div', {class: 'chart-empty'}, 'Nenhum processo analisado nos últimos 14 dias.'));
+    $('table-volume').replaceChildren();
+    return;
+  }
+  const W = 640, H = 190, left = 34, bottom = 22, top = 8, plotH = H - bottom - top;
+  const max = niceMax(Math.max(...totals));
+  const band = (W - left) / rows.length, barW = Math.min(24, band * 0.6);
+  const chart = svg('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Processos analisados por dia, por decisão'});
+  for (const tick of [0, max / 2, max]) {
+    const y = top + plotH - (tick / max) * plotH;
+    chart.append(svg('line', {x1: left, x2: W, y1: y, y2: y, stroke: 'var(--line)', 'stroke-width': 1}),
+      svg('text', {x: left - 6, y: y + 4, 'text-anchor': 'end', 'font-size': 11, 'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, number(Math.round(tick))));
+  }
+  const tip = tooltip(box);
+  rows.forEach((row, index) => {
+    const x = left + index * band + (band - barW) / 2;
+    let y = top + plotH;
+    const present = keys.filter((key) => row[key] > 0);
+    present.forEach((key, position) => {
+      const h = (row[key] / max) * plotH;
+      const gap = position > 0 ? 2 : 0;  // 2px de superfície entre segmentos
+      const isTop = position === present.length - 1;
+      const height = Math.max(0, h - gap);
+      y -= h;
+      const r = isTop ? Math.min(4, height) : 0;
+      // segmento com cantos de 4px apenas no topo da coluna
+      const d = `M${x},${y + gap + height} V${y + gap + r} Q${x},${y + gap} ${x + r},${y + gap} H${x + barW - r}`
+        + ` Q${x + barW},${y + gap} ${x + barW},${y + gap + r} V${y + gap + height} Z`;
+      chart.append(svg('path', {d, fill: STATUS_FILL[key]}));
+    });
+    if (totals[index] && (index === rows.length - 1 || totals[index] === Math.max(...totals))) {
+      chart.append(svg('text', {x: x + barW / 2, y: top + plotH - (totals[index] / max) * plotH - 5, 'text-anchor': 'middle',
+        'font-size': 11, 'font-weight': 600, fill: 'var(--ink)'}, number(totals[index])));
+    }
+    if (index % Math.ceil(rows.length / 7) === 0 || index === rows.length - 1) {
+      chart.append(svg('text', {x: x + barW / 2, y: H - 6, 'text-anchor': 'middle', 'font-size': 11, 'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, dayLabel(row.dia)));
+    }
+    const hit = svg('rect', {x: left + index * band, y: top, width: band, height: plotH, fill: 'transparent'});
+    hit.addEventListener('mouseenter', () => {
+      tip.replaceChildren(el('b', {}, dayLabel(row.dia) + ' · ' + number(totals[index]) + ' processos'),
+        ...keys.filter((key) => row[key]).map((key) => el('div', {}, STATUS_NAME[key] + ': ' + number(row[key]))));
+      tip.style.left = ((x + barW / 2) / W * 100) + '%';
+      tip.style.top = ((top + plotH - (totals[index] / max) * plotH) / H * 190) + 'px';
+      tip.style.display = totals[index] ? 'block' : 'none';
+    });
+    hit.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    chart.append(hit);
+  });
+  box.replaceChildren(chart, tip);
+  $('table-volume').replaceChildren(el('table', {},
+    el('thead', {}, el('tr', {}, ...['Dia', 'Aceitos', 'Não aceitos', 'Revisão manual', 'Fora do fluxo'].map((h) => el('th', {}, h)))),
+    el('tbody', {}, ...rows.filter((row, i) => totals[i]).map((row) => el('tr', {}, el('td', {}, dayLabel(row.dia)),
+      ...keys.map((key) => el('td', {}, number(row[key]))))))));
+}
+
+function drawTime(serie, days) {
+  const box = $('chart-tempo');
+  const byDay = Object.fromEntries(serie.map((row) => [row.dia, row.tempo_medio_ms]));
+  const points = days.map((day, index) => ({day, index, ms: byDay[day]})).filter((p) => p.ms != null);
+  if (!points.length) {
+    box.replaceChildren(el('div', {class: 'chart-empty'}, 'Sem medições nos últimos 14 dias.'));
+    $('table-tempo').replaceChildren();
+    return;
+  }
+  const W = 480, H = 190, left = 44, bottom = 22, top = 12, right = 12, plotH = H - bottom - top;
+  const max = niceMax(Math.max(...points.map((p) => p.ms)) / 1000) * 1000;
+  const xAt = (index) => left + (index / Math.max(1, days.length - 1)) * (W - left - right);
+  const yAt = (ms) => top + plotH - (ms / max) * plotH;
+  const chart = svg('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Tempo médio de análise por cidadão, por dia'});
+  for (const tick of [0, max / 2, max]) {
+    chart.append(svg('line', {x1: left, x2: W - right, y1: yAt(tick), y2: yAt(tick), stroke: 'var(--line)', 'stroke-width': 1}),
+      svg('text', {x: left - 6, y: yAt(tick) + 4, 'text-anchor': 'end', 'font-size': 11, 'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, seconds(tick)));
+  }
+  chart.append(svg('path', {d: points.map((p, i) => (i ? 'L' : 'M') + xAt(p.index) + ',' + yAt(p.ms)).join(' '),
+    fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round'}));
+  const cross = svg('line', {y1: top, y2: top + plotH, stroke: 'var(--line-strong)', 'stroke-width': 1, visibility: 'hidden'});
+  chart.append(cross);
+  for (const p of points) {
+    chart.append(svg('circle', {cx: xAt(p.index), cy: yAt(p.ms), r: 4, fill: 'var(--accent)', stroke: 'var(--surface)', 'stroke-width': 2}));
+  }
+  const last = points[points.length - 1];
+  chart.append(svg('text', {x: xAt(last.index), y: yAt(last.ms) - 9, 'text-anchor': 'end', 'font-size': 11, 'font-weight': 600,
+    fill: 'var(--ink)'}, seconds(last.ms)));
+  for (const index of [0, Math.floor((days.length - 1) / 2), days.length - 1]) {
+    chart.append(svg('text', {x: xAt(index), y: H - 6, 'text-anchor': index ? (index === days.length - 1 ? 'end' : 'middle') : 'start',
+      'font-size': 11, 'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, dayLabel(days[index])));
+  }
+  const tip = tooltip(box);
+  const overlay = svg('rect', {x: left, y: top, width: W - left - right, height: plotH, fill: 'transparent'});
+  overlay.addEventListener('mousemove', (event) => {
+    const rect = overlay.getBoundingClientRect();
+    const ratio = (event.clientX - rect.left) / rect.width;
+    const nearest = points.reduce((best, p) => Math.abs(p.index / (days.length - 1) - ratio) < Math.abs(best.index / (days.length - 1) - ratio) ? p : best);
+    cross.setAttribute('x1', xAt(nearest.index)); cross.setAttribute('x2', xAt(nearest.index));
+    cross.setAttribute('visibility', 'visible');
+    tip.replaceChildren(el('b', {}, dayLabel(nearest.day)), el('div', {}, 'Tempo médio: ' + seconds(nearest.ms)));
+    tip.style.left = (xAt(nearest.index) / W * 100) + '%';
+    tip.style.top = (yAt(nearest.ms) / H * 190) + 'px';
+    tip.style.display = 'block';
+  });
+  overlay.addEventListener('mouseleave', () => { tip.style.display = 'none'; cross.setAttribute('visibility', 'hidden'); });
+  chart.append(overlay);
+  box.replaceChildren(chart, tip);
+  $('table-tempo').replaceChildren(el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Dia'), el('th', {}, 'Tempo médio'))),
+    el('tbody', {}, ...points.map((p) => el('tr', {}, el('td', {}, dayLabel(p.day)), el('td', {}, seconds(p.ms)))))));
+}
+
+async function refreshDashboard() {
+  const d = await request('/api/painel?' + new URLSearchParams(currentBatch ? {lote: currentBatch} : {}));
+  const pct = (value) => d.processados ? Math.round(100 * value / d.processados) + '%' : '';
+  $('k-processados').textContent = number(d.processados);
+  $('k-processados-sub').textContent = (d.processando ? number(d.processando) + ' em leitura · ' : '')
+    + number(d.com_revisao_humana) + ' com revisão humana';
+  $('k-aceitos').textContent = number(d.aceitos);
+  $('k-aceitos-sub').textContent = [pct(d.aceitos), number(d.aceitos_sem_ressalvas) + ' sem ressalvas',
+    d.aceitos_conferir_cadastro ? number(d.aceitos_conferir_cadastro) + ' conferir cadastro' : '',
+    d.aceitos_com_revisao ? number(d.aceitos_com_revisao) + ' por revisão humana' : ''].filter(Boolean).join(' · ');
+  $('k-nao').textContent = number(d.nao_aceitos);
+  $('k-nao-sub').textContent = pct(d.nao_aceitos);
+  $('k-revisao').textContent = number(d.revisao_manual);
+  $('k-revisao-sub').textContent = [pct(d.revisao_manual), d.fora_do_fluxo ? number(d.fora_do_fluxo) + ' fora do fluxo' : '']
+    .filter(Boolean).join(' · ');
+  $('k-tempo').textContent = seconds(d.tempo_medio_ms);
+  $('k-tempo-sub').textContent = d.ritmo_processos_hora ? 'ritmo: ' + number(d.ritmo_processos_hora) + ' processos/hora' : 'leitura de todas as páginas';
+  const days = lastDays(d.dias);
+  drawVolume(d.serie, days);
+  drawTime(d.serie, days);
+}
+
+/* ---------- Lotes enviados ---------- */
+const LOT_STATE = {recebendo: 'Enviando', na_fila: 'Na fila', processando: 'Lendo documentos', concluido: 'Concluído', falha: 'Falha'};
+const LOT_REASON = {zip_invalido: 'arquivo ZIP inválido', espaco_insuficiente: 'sem espaço em disco no servidor',
+  limite_de_entradas: 'arquivos demais no ZIP', limite_de_extracao: 'tamanho extraído acima do limite',
+  falha_de_importacao: 'erro ao abrir os arquivos'};
 
 async function refreshBatches() {
   const lots = await request(api);
@@ -360,83 +549,125 @@ async function refreshBatches() {
   currentBatch = select.value;
 }
 
-function selectBatch(id) {
-  currentBatch = id;
-  $('batches').value = id;
-  refreshBatch();
-  refreshTable();
+async function refreshLots() {
+  const data = await request('/api/lotes-estado');
+  $('lots-config').textContent = 'até ' + data.lotes_simultaneos + ' lotes e ' + data.paginas_em_paralelo + ' páginas em paralelo';
+  if (!data.lotes.length) { $('lots').replaceChildren(el('p', {class: 'muted small'}, 'Nenhum lote enviado.')); return; }
+  const mb = (bytes) => (bytes / 1048576).toLocaleString('pt-BR', {maximumFractionDigits: 0}) + ' MB';
+  $('lots').replaceChildren(...data.lotes.slice(0, 30).map((lot) => {
+    const progress = lot.progresso;
+    let fraction = 0, detail = '';
+    if (lot.status === 'recebendo') { fraction = lot.recebido / Math.max(1, lot.bytes); detail = mb(lot.recebido) + ' de ' + mb(lot.bytes); }
+    else if (lot.etapa === 'separando') { detail = 'separando os processos…'; }
+    else if (lot.status === 'processando' && progress?.total_paginas) {
+      fraction = progress.paginas_concluidas / progress.total_paginas;
+      detail = number(progress.paginas_concluidas) + ' de ' + number(progress.total_paginas) + ' páginas';
+    } else if (lot.status === 'concluido') { fraction = 1; detail = lot.duracao_ms ? 'em ' + seconds(lot.duracao_ms) : ''; }
+    else if (lot.status === 'falha') { detail = LOT_REASON[lot.motivo] || lot.motivo || ''; }
+    const stateClass = {concluido: 'b-deferido', falha: 'b-indeferido', recebendo: 'b-pendente'}[lot.status] || 'b-processando';
+    return el('div', {class: 'lot'},
+      el('div', {}, el('div', {class: 'name', title: lot.nome}, lot.nome),
+        el('div', {class: 'meta'}, [mb(lot.bytes), lot.processos != null ? number(lot.processos) + ' processos' : null,
+          new Date((lot.criado || 0) * 1000).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'})].filter(Boolean).join(' · '))),
+      el('div', {class: 'state'}, el('span', {class: 'badge ' + stateClass}, LOT_STATE[lot.status] || lot.status),
+        el('div', {class: 'meta'}, detail)),
+      lot.status === 'concluido' ? null : el('div', {class: 'bar'}, el('i', {style: 'width:' + Math.round(100 * fraction) + '%'})));
+  }));
 }
 
-async function refreshBatch() {
-  const lotActions = ['reanalisar', 'avaliar', 'diagnostico'];
-  if (!currentBatch) {
-    for (const id of lotActions) $(id).hidden = true;
-    return;
-  }
-  const id = currentBatch;
-  const lot = await request(api + '/' + id);
-  if (id !== currentBatch) return;
+async function refreshTracked() {
+  if (!trackedBatch) return;
+  const lot = await request(api + '/' + trackedBatch);
   const progress = lot.progresso;
-  if (['na_fila', 'processando'].includes(lot.status)) {
-    const fraction = progress?.total_paginas ? progress.paginas_concluidas / progress.total_paginas : 0;
+  if (lot.status === 'na_fila') step('ler', 'Na fila · ' + lot.processos.length + ' processo(s) separados', 0);
+  else if (lot.status === 'processando') {
     const done = lot.processos.filter((row) => row.concluido).length;
-    step('ler', (progress ? progress.paginas_concluidas + ' de ' + progress.total_paginas + ' páginas · ' : 'Na fila · ')
-      + done + ' de ' + lot.processos.length + ' processo(s) com parecer', fraction);
-  } else if (lot.status === 'falha') {
-    step('ler', 'Falha no processamento: ' + (lot.motivo || 'erro') + '.');
-  } else if (lot.status === 'concluido' && $('job').classList.contains('on')) {
-    step('pronto', lot.processos.length + ' processo(s) analisado(s).', 1);
-  }
+    step('ler', (progress ? number(progress.paginas_concluidas) + ' de ' + number(progress.total_paginas) + ' páginas · ' : '')
+      + done + ' de ' + lot.processos.length + ' processo(s) com parecer',
+      progress?.total_paginas ? progress.paginas_concluidas / progress.total_paginas : 0);
+  } else if (lot.status === 'falha') step('ler', 'Falha: ' + (LOT_REASON[lot.motivo] || lot.motivo || 'erro') + '.');
+  else if (lot.status === 'concluido') { step('pronto', lot.processos.length + ' processo(s) analisado(s).', 1); trackedBatch = ''; }
+}
+
+async function refreshLotActions() {
+  const actions = ['reanalisar', 'avaliar', 'diagnostico'];
+  if (!currentBatch) { for (const id of actions) $(id).hidden = true; return; }
+  const lot = await request(api + '/' + currentBatch);
   $('reanalisar').hidden = lot.status === 'recebendo';
   $('avaliar').hidden = lot.status !== 'concluido';
   $('diagnostico').hidden = lot.status === 'recebendo';
 }
 
-function formatDate(seconds) {
-  return seconds ? new Date(seconds * 1000).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}) : '';
+/* ---------- Processos: busca, filtros, ordenação e paginação ---------- */
+const view = {q: '', filtro: '', ordem: 'atualizado', direcao: 'desc', pagina: 1, por_pagina: 50};
+const FILTROS = [['', 'Todos', 'todos'], ['aceitos', 'Aceitos'], ['nao_aceitos', 'Não aceitos'],
+  ['revisao_manual', 'Revisão manual'], ['fora_do_fluxo', 'Fora do fluxo'], ['processando', 'Processando'],
+  ['revisao_humana', 'Com revisão humana'], ['duplicados', 'Possíveis duplicidades']];
+
+function query(extra = {}) {
+  const params = new URLSearchParams({q: view.q, filtro: view.filtro, ordem: view.ordem, direcao: view.direcao, ...extra});
+  if (currentBatch) params.set('lote', currentBatch);
+  return params.toString();
+}
+function formatDate(value) {
+  return value ? new Date(value * 1000).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}) : '';
 }
 
 async function refreshTable() {
-  const data = await request('/api/processos?' + query());
+  const data = await request('/api/processos?' + query({pagina: view.pagina, por_pagina: view.por_pagina}));
+  if (view.pagina > data.paginas) { view.pagina = data.paginas; return refreshTable(); }
   const totals = data.totais || {};
-  const count = (key) => key ? GRUPOS[key].reduce((sum, r) => sum + (totals[r] || 0), 0)
-    : Object.values(totals).reduce((a, b) => a + b, 0);
-  $('counts').replaceChildren(...FILTROS.map(([key, label]) => el('button', {
-    type: 'button', class: 'chip' + (view.filtro === key ? ' on' : ''),
-    onclick: () => { view.filtro = key; refreshTable(); }}, label + ' · ' + count(key))));
+  $('counts').replaceChildren(...FILTROS.map(([key, label, total]) => el('button', {
+    type: 'button', class: 'chip' + (view.filtro === key ? ' on' : ''), 'aria-pressed': String(view.filtro === key),
+    onclick: () => { view.filtro = key; view.pagina = 1; refreshTable(); }},
+    label, el('span', {class: 'n'}, number(totals[total || key] || 0)))));
   $('csv').href = '/api/processos/exportar.csv?' + query();
   $('json-all').href = '/api/processos/exportar?' + query();
-  for (const th of document.querySelectorAll('th[data-sort]')) {
-    th.dataset.dir = th.dataset.sort === view.ordem ? view.direcao : '';
-  }
+  for (const th of document.querySelectorAll('th[data-sort]')) th.dataset.dir = th.dataset.sort === view.ordem ? view.direcao : '';
+  const first = data.total ? (data.pagina - 1) * data.por_pagina + 1 : 0;
+  const last = Math.min(data.total, data.pagina * data.por_pagina);
+  $('list-count').textContent = number(data.total) + ' processo(s)' + (view.q || view.filtro ? ' no filtro' : '');
+  $('page-info').textContent = data.total ? `${number(first)}–${number(last)} de ${number(data.total)} · página ${data.pagina} de ${data.paginas}` : '';
+  $('prev').disabled = data.pagina <= 1;
+  $('next').disabled = data.pagina >= data.paginas;
   const body = $('rows');
   if (!data.processos.length) {
     body.replaceChildren(el('tr', {}, el('td', {class: 'empty', colspan: '6'},
-      view.q || view.filtro ? 'Nenhum processo encontrado com esses filtros.' : 'Selecione uma pasta para começar.')));
+      view.q || view.filtro ? 'Nenhum processo encontrado com esses filtros.' : 'Nenhum processo ainda. Envie uma pasta para começar.')));
     return;
   }
-  body.replaceChildren(...data.processos.map((row) => el('tr', {onclick: () => openProcess(row.lote_id, row.processo_id)},
-    el('td', {}, row.sei || row.processo, el('div', {class: 'why'}, row.lote_nome || '')),
-    el('td', {}, row.requerente || '—', row.cpf ? el('div', {class: 'why'}, row.cpf) : null),
-    el('td', {}, el('span', {class: 'badge r-' + row.resultado}, RESULT[row.resultado] || row.resultado),
-      row.renda_centavos != null ? el('div', {class: 'why'}, 'Renda ' + money(row.renda_centavos)) : null),
-    el('td', {class: 'why'}, row.sintese ? el('div', {}, row.sintese) : null,
-      ['enquadra', 'enquadra_conferir_cadastro'].includes(row.resultado) ? null : (row.motivos || [])[0] || ''),
-    el('td', {class: 'why'}, formatDate(row.atualizado_em), row.versao > 1 ? el('div', {}, 'versão ' + row.versao) : null),
-    el('td', {class: 'actions'},
-      el('button', {type: 'button', title: 'Ler de novo todas as páginas deste processo',
-        onclick: (event) => { event.stopPropagation(); rerunProcess(row.lote_id, row.processo_id); }}, 'Reanalisar'),
-      el('button', {type: 'button', class: 'danger',
-        onclick: (event) => { event.stopPropagation(); deleteProcess(row); }}, 'Excluir')))));
+  body.replaceChildren(...data.processos.map((row) => {
+    const decision = row.resultado === 'processando' ? 'processando' : (row.decisao || AI_TO_DECISION[row.resultado]);
+    const human = row.origem_decisao === 'revisao_humana';
+    const changed = human && row.decisao && AI_TO_DECISION[row.resultado] && row.decisao !== AI_TO_DECISION[row.resultado];
+    const dup = row.duplicidades?.length
+      ? el('span', {class: 'tag', style: 'color:var(--warning-ink);border-color:#f3d48a;background:var(--warning-bg)',
+          title: row.duplicidades.map((d) => (d.sei || d.processo) + ': ' + d.descricao).join('\n')}, 'Possível duplicidade')
+      : null;
+    return el('tr', {onclick: () => openProcess(row.lote_id, row.processo_id)},
+      el('td', {}, row.sei || row.processo, el('div', {class: 'sub'}, row.lote_nome || '')),
+      el('td', {}, row.requerente || '—', row.cpf ? el('div', {class: 'sub'}, row.cpf) : null),
+      el('td', {}, badge(decision), el('span', {class: 'tag' + (human ? ' human' : ''), title: human && row.revisado_por
+        ? 'Revisado por ' + row.revisado_por : 'Decisão sem intervenção humana'}, human ? 'Revisão humana' : 'IA'), dup,
+        changed ? el('div', {class: 'sub'}, 'IA sugeriu: ' + DECISION[AI_TO_DECISION[row.resultado]]) : null,
+        row.renda_centavos != null ? el('div', {class: 'sub'}, 'Renda ' + money(row.renda_centavos)) : null),
+      el('td', {class: 'sub'}, row.sintese ? el('div', {style: 'color:var(--ink)'}, row.sintese) : null,
+        decision === 'deferido' ? null : (row.motivos || [])[0] || ''),
+      el('td', {class: 'sub'}, formatDate(row.atualizado_em), row.versao > 1 ? el('div', {}, 'versão ' + row.versao) : null),
+      el('td', {class: 'actions'},
+        el('button', {type: 'button', class: 'primary', onclick: (event) => { event.stopPropagation(); openProcess(row.lote_id, row.processo_id); }}, 'Analisar'),
+        el('button', {type: 'button', title: 'Ler de novo todas as páginas deste processo',
+          onclick: (event) => { event.stopPropagation(); rerunProcess(row.lote_id, row.processo_id); }}, 'Reanalisar'),
+        el('button', {type: 'button', class: 'danger', onclick: (event) => { event.stopPropagation(); deleteProcess(row); }}, 'Excluir')));
+  }));
 }
 
 async function rerunProcess(lote, processo) {
-  if (!confirm('Ler de novo todas as páginas deste processo? A conferência manual registrada é mantida.')) return false;
+  if (!confirm('Ler de novo todas as páginas deste processo? A conferência e a decisão registradas são mantidas.')) return false;
   try {
     const lot = await request(api + '/' + lote + '/processos/' + processo + '/reanalisar', {method: 'POST'});
-    if (lote !== currentBatch) selectBatch(lote);
-    step('ler', lot.status === 'processando' ? 'Reanálise agendada: começa quando a leitura atual terminar.'
-      : 'Reanalisando o processo…', 0);
+    trackedBatch = lote;
+    step('ler', lot.status === 'processando' ? 'Reanálise agendada: começa quando a leitura atual terminar.' : 'Reanalisando o processo…', 0);
     refreshTable();
     return lot;
   } catch (error) { alert('Não foi possível reanalisar: ' + error.message); return false; }
@@ -454,7 +685,7 @@ async function deleteProcess(row) {
       {method: 'POST', body: JSON.stringify({confirmacao: 'EXCLUIR'})});
     if ($('detail').classList.contains('on')) $('close').click();
     await refreshBatches();
-    refreshTable();
+    refreshAll();
   } catch (error) {
     alert(error.message === 'lote_em_processamento'
       ? 'O lote deste processo ainda está em leitura. Tente de novo quando terminar.'
@@ -465,35 +696,33 @@ async function deleteProcess(row) {
 let searchTimer;
 $('search').oninput = () => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => { view.q = $('search').value; refreshTable(); }, 300);
+  searchTimer = setTimeout(() => { view.q = $('search').value; view.pagina = 1; refreshTable(); }, 300);
 };
 for (const th of document.querySelectorAll('th[data-sort]')) {
   th.onclick = () => {
-    view.direcao = view.ordem === th.dataset.sort && view.direcao === 'desc' ? 'asc'
-      : view.ordem === th.dataset.sort ? 'desc' : (th.dataset.sort === 'atualizado' ? 'desc' : 'asc');
+    view.direcao = view.ordem === th.dataset.sort ? (view.direcao === 'desc' ? 'asc' : 'desc')
+      : (th.dataset.sort === 'atualizado' ? 'desc' : 'asc');
     view.ordem = th.dataset.sort;
+    view.pagina = 1;
     refreshTable();
   };
 }
-$('batches').onchange = () => { $('job').classList.remove('on'); selectBatch($('batches').value); };
+$('prev').onclick = () => { view.pagina = Math.max(1, view.pagina - 1); refreshTable(); };
+$('next').onclick = () => { view.pagina += 1; refreshTable(); };
+$('page-size').onchange = () => { view.por_pagina = Number($('page-size').value); view.pagina = 1; refreshTable(); };
+$('batches').onchange = () => { currentBatch = $('batches').value; view.pagina = 1; refreshAll(); };
 $('reanalisar').onclick = async () => {
   if (!confirm('Reler as páginas com falha ou lidas por versão anterior em todos os processos deste lote?')) return;
   try {
     const lot = await request(api + '/' + currentBatch + '/reanalisar', {method: 'POST'});
-    step('ler', lot.status === 'processando' ? 'Reanálise agendada: começa quando a leitura atual terminar.'
-      : 'Reanalisando…', 0);
-    refreshBatch();
+    trackedBatch = currentBatch;
+    step('ler', lot.status === 'processando' ? 'Reanálise agendada: começa quando a leitura atual terminar.' : 'Reanalisando…', 0);
   } catch (error) { alert('Não foi possível reanalisar: ' + error.message); }
 };
-$('rerun-process').onclick = async () => {
-  const lot = await rerunProcess(detailBatch, currentProcess);
-  if (lot) {
-    $('d-badge').className = 'badge r-processando';
-    $('d-badge').textContent = lot.status === 'processando' ? 'Reanálise agendada' : 'Reanalisando';
-  }
-};
-$('delete-process').onclick = () => deleteProcess({lote_id: detailBatch, processo_id: currentProcess,
-  sei: $('d-sub').dataset.sei, requerente: $('d-title').textContent});
+
+function refreshAll() {
+  return Promise.all([refreshDashboard(), refreshLots(), refreshTable(), refreshLotActions(), refreshTracked()]);
+}
 
 /* ---------- Detalhe do processo ---------- */
 function show(fileId, page = 1) {
@@ -519,27 +748,49 @@ function pageButtons(sources) {
     el('button', {type: 'button', onclick: () => show(source.arquivo, source.pagina)}, 'p. ' + source.pagina)));
 }
 
+function renderDecision(detail) {
+  const report = detail.parecer;
+  const ai = detail.status === 'em_revisao' ? AI_TO_DECISION[report.resultado] : 'processando';
+  const human = detail.revisao?.decisao;
+  $('d-ia').replaceChildren(badge(ai, ai === 'processando' ? 'Processando' : RESULT[report.resultado]));
+  const final = human ? human.resultado : ai;
+  $('d-final').replaceChildren(badge(final),
+    el('div', {class: 'small muted', style: 'margin-top:.3rem'}, human
+      ? 'Revisão humana' + (human.usuario ? ' por ' + human.usuario : '') + ' em ' + formatDate(human.registrada_em)
+      : (detail.revisao ? 'Conferência manual registrada; decisão da IA mantida' : '100% IA — sem revisão humana')));
+  const form = $('decision-form');
+  form.reset();
+  if (human) {
+    form.elements.namedItem('justificativa').value = human.justificativa || '';
+    for (const input of form.querySelectorAll('input[name=resultado]')) input.checked = input.value === human.resultado;
+  }
+  for (const control of form.elements) control.disabled = detail.status !== 'em_revisao';
+  $('decision-status').textContent = detail.status !== 'em_revisao' ? 'Disponível quando a leitura terminar.' : '';
+}
+
 async function openProcess(lote, id) {
   detailBatch = lote;
   currentProcess = id;
   const path = api + '/' + lote + '/processos/' + id;
   const detail = await request(path);
+  detailData = detail;
   const report = detail.parecer;
   $('detail').classList.add('on');
   $('d-title').textContent = report.resumo.requerente || detail.processo;
-  $('d-sub').textContent = (report.resumo.sintese ? report.resumo.sintese + ' · ' : '') +
-    (detail.numero_processo_sei || detail.processo) +
-    (report.resumo.inscricao_imobiliaria ? ' · inscrição ' + report.resumo.inscricao_imobiliaria : '');
-  const result = detail.status === 'em_revisao' ? report.resultado : 'processando';
-  $('d-badge').className = 'badge r-' + result;
-  $('d-badge').textContent = RESULT[result];
-  $('criteria').replaceChildren(...report.criterios.map((row) => el('li', {class: row.status},
-    el('span', {class: 'ic', title: row.status}, MARK[row.status] || '·'),
+  $('d-sub').textContent = [detail.numero_processo_sei || detail.processo,
+    report.resumo.inscricao_imobiliaria ? 'inscrição ' + report.resumo.inscricao_imobiliaria : '',
+    report.resumo.sintese || ''].filter(Boolean).join(' · ');
+  $('d-sub').dataset.sei = detail.numero_processo_sei || detail.processo;
+  const final = detail.revisao?.decisao?.resultado || (detail.status === 'em_revisao' ? AI_TO_DECISION[report.resultado] : 'processando');
+  $('d-badge').replaceChildren(badge(final));
+  $('d-badge').className = '';
+  renderDecision(detail);
+  $('criteria').replaceChildren(...report.criterios.map((row) => el('li', {},
+    el('span', {class: 'icon ' + (MARK_CLASS[row.status] || 'i-neutral'), title: row.status, 'aria-hidden': 'true'}, MARK[row.status] || '·'),
     el('div', {}, el('strong', {}, LABEL[row.criterio] || row.criterio),
       el('span', {class: 'm'}, row.motivo), pageButtons(row.evidencias)))));
   $('opinion').textContent = report.parecer_texto;
   $('json').href = path + '/exportar';
-  $('d-sub').dataset.sei = detail.numero_processo_sei || detail.processo;
   const files = detail.arquivos.filter((doc) => doc.id);
   $('files').replaceChildren(...files.map((doc) => el('option', {value: doc.id}, doc.origem)));
   $('page-list').replaceChildren(...detail.paginas.map((row) => el('li', {},
@@ -562,15 +813,52 @@ async function openProcess(lote, id) {
   $('note-status').textContent = detail.revisao ? 'Conferência registrada.' : '';
 }
 
+function currentReview(extra) {
+  const review = detailData?.revisao || {};
+  return {nota: review.nota || '', confirmacoes: review.confirmacoes || {}, fonte_renda: review.fonte_renda || '',
+    renda_bruta_familiar_centavos: review.renda_bruta_familiar_centavos ?? null, decisao: review.decisao
+      ? {resultado: review.decisao.resultado, justificativa: review.decisao.justificativa} : null, ...extra};
+}
+
+async function saveReview(body, statusId) {
+  await request(api + '/' + detailBatch + '/processos/' + currentProcess + '/revisao', {method: 'POST', body: JSON.stringify(body)});
+  await openProcess(detailBatch, currentProcess);
+  $(statusId).textContent = 'Salvo.';
+  refreshAll();
+}
+
+$('decision-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const form = new FormData($('decision-form'));
+  const resultado = form.get('resultado');
+  const justificativa = (form.get('justificativa') || '').trim();
+  if (!resultado) { $('decision-status').textContent = 'Escolha Deferir ou Indeferir.'; return; }
+  if (justificativa.length < 10) { $('decision-status').textContent = 'Escreva a justificativa (mínimo de 10 caracteres).'; return; }
+  const ai = AI_TO_DECISION[detailData.parecer.resultado];
+  if (resultado !== ai && !confirm('A decisão "' + DECISION[resultado] + '" é diferente da sugestão da IA ("' + DECISION[ai]
+    + '"). Confirmar a decisão humana?')) return;
+  try {
+    const review = currentReview({decisao: {resultado, justificativa}});
+    review.nota = review.nota || justificativa;
+    await saveReview(review, 'decision-status');
+  } catch (error) { $('decision-status').textContent = 'Não foi possível salvar: ' + error.message; }
+};
+
 $('files').onchange = () => show($('files').value);
-$('close').onclick = () => { $('detail').classList.remove('on'); currentProcess = ''; };
+$('close').onclick = () => { $('detail').classList.remove('on'); currentProcess = ''; detailData = null; };
 $('detail').onclick = (event) => { if (event.target === $('detail')) $('close').click(); };
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape') $('close').click(); });
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && $('detail').classList.contains('on')) $('close').click(); });
 $('copy').onclick = async () => {
   await navigator.clipboard.writeText($('opinion').textContent);
   $('copy').textContent = 'Copiado';
   setTimeout(() => { $('copy').textContent = 'Copiar'; }, 1500);
 };
+$('rerun-process').onclick = async () => {
+  const lot = await rerunProcess(detailBatch, currentProcess);
+  if (lot) $('d-badge').replaceChildren(badge('processando', lot.status === 'processando' ? 'Reanálise agendada' : 'Reanalisando'));
+};
+$('delete-process').onclick = () => deleteProcess({lote_id: detailBatch, processo_id: currentProcess,
+  sei: $('d-sub').dataset.sei, requerente: $('d-title').textContent});
 $('notes').onsubmit = async (event) => {
   event.preventDefault();
   try {
@@ -579,21 +867,17 @@ $('notes').onsubmit = async (event) => {
     if (renda.trim() && !parts) throw new Error('Informe a renda em reais, por exemplo 3242,00.');
     const cents = parts ? Number(parts[1]) * 100 + Number((parts[2] || '').padEnd(2, '0')) : null;
     const confirmacoes = Object.fromEntries(Object.entries(fields).filter(([, value]) => value.trim()));
-    await request(api + '/' + detailBatch + '/processos/' + currentProcess + '/revisao', {
-      method: 'POST', body: JSON.stringify({nota, confirmacoes, fonte_renda, renda_bruta_familiar_centavos: cents}),
-    });
-    await openProcess(detailBatch, currentProcess);
-    refreshTable();
+    await saveReview(currentReview({nota, confirmacoes, fonte_renda, renda_bruta_familiar_centavos: cents}), 'note-status');
   } catch (error) {
     $('note-status').textContent = error.message;
   }
 };
 
-refreshBatches().then(refreshTable).catch((error) => { $('footer-status').textContent = 'Falha: ' + error.message; });
+refreshBatches().then(refreshAll).catch((error) => { $('footer-status').textContent = 'Falha: ' + error.message; });
 setInterval(() => {
   if (uploading) return;
-  refreshBatch().catch(() => {});
-  if (document.activeElement !== $('search')) refreshTable().catch(() => {});
+  Promise.all([refreshLots(), refreshTracked(), refreshDashboard(), refreshLotActions(),
+    document.activeElement !== $('search') ? refreshTable() : null]).catch(() => {});
 }, 5000);
 
 /* ---------- Comparação com gabarito ---------- */

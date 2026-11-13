@@ -2,186 +2,355 @@
 <html lang="pt-BR">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Isenção de IPTU · Franca</title>
+<title>Isenção de IPTU · Prefeitura de Franca</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
+/* Identidade visual do SIGPMF (Prefeitura Municipal de Franca): IBM Plex, azul #0066CC, status verde/âmbar/vermelho. */
 :root {
-  --ink: #15202e; --muted: #5b6878; --line: #e3e8ef; --bg: #f6f8fb; --card: #fff;
-  --brand: #1d4f8c; --ok: #12784a; --ok-bg: #e5f5ec; --no: #b42318; --no-bg: #fdecea;
-  --wait: #9a6100; --wait-bg: #fff4dc; --idle: #5b6878; --idle-bg: #eef1f5;
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg);
+  --bg: #F3F6FA; --surface: #FFFFFF; --surface-2: #EEF3F9; --line: #DCE3EC; --line-strong: #C9D3DF;
+  --ink: #0F1B2D; --ink-2: #44546A; --ink-3: #5A6B82;
+  --brand: #0B4F98; --brand-2: #0066CC; --accent: #0066CC; --accent-soft: #E2EDFA; --accent-ink: #FFFFFF;
+  --good: #1C8A57; --good-ink: #156B43; --good-bg: #E3F4EB;
+  --critical: #C2352E; --critical-ink: #A12A24; --critical-bg: #FBE5E3;
+  --warning: #B86E00; --warning-ink: #8F5600; --warning-bg: #FBF0DC;
+  --neutral: #8593A6; --neutral-ink: #4A5A70; --neutral-bg: #EEF3F9;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --radius: 10px; --shadow: none;
+  font: 14px/1.45 var(--font-body); color: var(--ink); background: var(--bg); font-variant-numeric: tabular-nums;
+  color-scheme: light;
 }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0C141F; --surface: #131E2D; --surface-2: #1A2738; --line: #26364C; --line-strong: #31455F;
+  --ink: #E5ECF5; --ink-2: #B4C2D4; --ink-3: #93A4BA;
+  --brand: #4C9BFF; --brand-2: #4C9BFF; --accent: #4C9BFF; --accent-soft: #16304F; --accent-ink: #06121F;
+  --good: #4CC28A; --good-ink: #4CC28A; --good-bg: #123227;
+  --critical: #F0716A; --critical-ink: #F0716A; --critical-bg: #3D1918;
+  --warning: #E3A13B; --warning-ink: #E3A13B; --warning-bg: #3A2A10;
+  --neutral: #7D8DA3; --neutral-ink: #B4C2D4; --neutral-bg: #1A2738; color-scheme: dark; } }
 * { box-sizing: border-box; }
 body { margin: 0; }
-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
-  padding: .9rem 1.5rem; background: var(--card); border-bottom: 1px solid var(--line); }
-header h1 { font-size: 1.05rem; margin: 0; }
-header small { color: var(--muted); }
-header nav { display: flex; gap: .75rem; align-items: center; font-size: .9rem; }
-main { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
-a { color: var(--brand); }
-button { font: inherit; cursor: pointer; border-radius: .5rem; border: 1px solid var(--line);
-  background: var(--card); color: var(--ink); padding: .45rem .8rem; }
-button.primary { background: var(--brand); border-color: var(--brand); color: #fff; padding: .7rem 1.3rem; font-weight: 600; }
-button.link { border: 0; background: none; color: var(--brand); padding: 0; }
-button:disabled { opacity: .55; cursor: default; }
-select, input, textarea { font: inherit; border: 1px solid var(--line); border-radius: .45rem; padding: .4rem .5rem; background: #fff; }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: .8rem; padding: 1.25rem; margin-bottom: 1rem; }
-#drop { text-align: center; padding: 2.5rem 1rem; border: 2px dashed #c7d2e0; border-radius: .9rem;
-  background: var(--card); transition: border-color .15s, background .15s; }
-#drop.over { border-color: var(--brand); background: #eef4fb; }
-#drop h2 { margin: .2rem 0 .3rem; font-size: 1.3rem; }
-#drop p { color: var(--muted); margin: .2rem 0 1.1rem; }
-#drop .alt { margin-top: .8rem; font-size: .9rem; color: var(--muted); }
-#job { display: none; }
+a { color: var(--brand-2); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3 { margin: 0; letter-spacing: -.01em; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--surface);
+  padding: .4rem .8rem; font-weight: 500; transition: background .12s, border-color .12s; }
+button:hover { background: var(--surface-2); border-color: #b9c3cf; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button.primary:hover { background: var(--brand); }
+button.link { border: 0; background: none; color: var(--brand-2); padding: 0; font-weight: 500; }
+button.danger { color: var(--critical-ink); border-color: #efc3c0; }
+button.danger:hover { background: var(--critical-bg); }
+button:disabled { opacity: .5; cursor: default; }
+select, input, textarea { border: 1px solid var(--line-strong); border-radius: 7px; padding: .45rem .6rem; background: var(--surface); }
+.muted { color: var(--ink-3); }
+.small { font-size: .82rem; }
+
+/* topo (padrão SIGPMF: barra branca com borda) */
+.topbar { background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+.topbar .inner { max-width: 1440px; margin: 0 auto; padding: .7rem 1.5rem; display: flex; align-items: center;
+  justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: .8rem; }
+.brand .mark { width: 36px; height: 36px; border-radius: 8px; background: var(--accent); color: var(--accent-ink);
+  display: grid; place-items: center; font: 600 13px var(--font-display); letter-spacing: .03em; }
+.brand h1 { font: 600 20px/1.15 var(--font-display); letter-spacing: .01em; }
+.brand small { color: var(--ink-3); font-size: .78rem; }
+.brand img { height: 40px; width: auto; max-width: 200px; object-fit: contain; }
+.topbar nav { display: flex; gap: .9rem; align-items: center; font-size: .85rem; }
+.topbar nav label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); display: flex; gap: .5rem; align-items: center; }
+.topbar select { background: var(--surface-2); max-width: 22rem; text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--ink); }
+.tag-env { font: 500 11px var(--font-data); padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+
+main { max-width: 1440px; margin: 0 auto; padding: 1.25rem 1.5rem 2rem; display: grid; gap: 1rem; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.1rem 1.2rem; }
+.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .8rem; flex-wrap: wrap; }
+.card-head h2 { font-size: 14px; font-weight: 600; }
+.card-head .muted { font-size: .82rem; }
+
+/* indicadores */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1rem; }
+.kpi { padding: .95rem 1.1rem; }
+.kpi .label { font-size: 12px; color: var(--ink-3); display: flex; align-items: center; gap: .45rem; }
+.kpi .value { font: 600 30px/1.1 var(--font-display); margin-top: .25rem; }
+.kpi .sub { font: 11px/1.4 var(--font-data); color: var(--ink-3); margin-top: .2rem; min-height: 1.2em; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-grid; place-items: center; flex: none; }
+.icon { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 700; color: #fff; flex: none; }
+.i-warning { color: #fff !important; }
+.i-good { background: var(--good); } .i-critical { background: var(--critical); }
+.i-warning { background: var(--warning); color: #3b2a00; } .i-neutral { background: var(--neutral); }
+.i-brand { background: var(--accent); }
+.charts { display: grid; grid-template-columns: 1.35fr 1fr; gap: 1rem; }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; height: 190px; overflow: visible; }
+.legend { display: flex; gap: 1rem; flex-wrap: wrap; font-size: .8rem; color: var(--ink-2); margin-top: .5rem; }
+.legend span { display: inline-flex; align-items: center; gap: .35rem; }
+.tooltip { position: absolute; pointer-events: none; background: var(--ink); color: var(--bg); font-size: .78rem; line-height: 1.45;
+  padding: .45rem .6rem; border-radius: 6px; white-space: nowrap; transform: translate(-50%, calc(-100% - 10px)); display: none; z-index: 2; }
+.tooltip b { font-weight: 600; }
+.chart-empty { height: 190px; display: grid; place-items: center; color: var(--ink-3); font-size: .85rem; }
+details.data-table summary { font-size: .8rem; margin-top: .4rem; }
+details.data-table table { font-size: .8rem; margin-top: .4rem; }
+
+/* envio e lotes */
+.intake { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 1rem; }
+#drop { border: 1.5px dashed var(--line-strong); border-radius: var(--radius); background: var(--surface); padding: 1.4rem;
+  display: grid; align-content: center; justify-items: center; text-align: center; gap: .35rem; transition: border-color .15s, background .15s; }
+#drop.over { border-color: var(--accent); background: var(--accent-soft); }
+#drop h2 { font-size: 1rem; font-weight: 650; }
+#drop p { color: var(--ink-3); margin: 0 0 .6rem; font-size: .85rem; max-width: 30rem; }
+#job { display: none; width: 100%; margin-top: .8rem; text-align: left; }
 #job.on { display: block; }
-.steps { display: flex; gap: .4rem; margin: .2rem 0 .8rem; flex-wrap: wrap; }
-.steps span { font-size: .82rem; padding: .2rem .6rem; border-radius: 999px; background: var(--idle-bg); color: var(--muted); }
-.steps span.done { background: var(--ok-bg); color: var(--ok); }
-.steps span.now { background: var(--brand); color: #fff; }
-progress { width: 100%; height: .5rem; accent-color: var(--brand); }
-#job-text { color: var(--muted); font-size: .9rem; margin: .4rem 0 0; }
-.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: .8rem; }
-.counts { display: flex; gap: .5rem; flex-wrap: wrap; }
-.badge { display: inline-block; font-size: .8rem; font-weight: 600; padding: .15rem .6rem; border-radius: 999px; white-space: nowrap; }
-.r-enquadra, .r-enquadra_conferir_cadastro { background: var(--ok-bg); color: var(--ok); }
-.r-nao_enquadra { background: var(--no-bg); color: var(--no); }
-.r-em_analise { background: var(--wait-bg); color: var(--wait); }
-.r-processando, .r-erro, .r-fora_do_fluxo { background: var(--idle-bg); color: var(--idle); }
-#search { flex: 1; min-width: 16rem; padding: .55rem .7rem; }
-.exports { display: flex; gap: 1rem; font-size: .9rem; }
-.counts { margin-bottom: .6rem; }
-.chip { border-radius: 999px; font-size: .82rem; padding: .25rem .75rem; }
-.chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+.steps { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: .5rem; }
+.steps span { font-size: .75rem; padding: .12rem .55rem; border-radius: 999px; background: var(--neutral-bg); color: var(--ink-3); }
+.steps span.done { background: var(--good-bg); color: var(--good-ink); }
+.steps span.now { background: var(--brand-2); color: #fff; }
+.bar { height: 6px; background: var(--accent-soft); border-radius: 999px; overflow: hidden; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .3s; }
+#job-text { color: var(--ink-2); font-size: .82rem; margin: .45rem 0 0; }
+.lots { max-height: 250px; overflow: auto; margin: 0 -.4rem; }
+.lot { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem 1rem; padding: .55rem .4rem; border-bottom: 1px solid var(--line); }
+.lot:last-child { border-bottom: 0; }
+.lot .name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lot .meta { font-size: .78rem; color: var(--ink-3); }
+.lot .bar { grid-column: 1 / -1; height: 4px; }
+.lot .state { font-size: .78rem; text-align: right; }
+
+/* processos */
+.toolbar { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; margin-bottom: .75rem; }
+#search { flex: 1; min-width: 18rem; padding: .55rem .75rem; }
+.exports { display: flex; gap: .5rem; }
+.chips { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.chip { border-radius: 999px; font-size: .8rem; padding: .25rem .7rem; display: inline-flex; gap: .4rem; align-items: center; }
+.chip .n { color: var(--ink-3); font-weight: 500; }
+.chip { background: var(--surface-2); border-color: var(--line); }
+.chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.chip.on .n { color: rgba(255,255,255,.8); }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); font-weight: 600;
+  padding: .55rem .6rem; border-bottom: 1px solid var(--line); background: var(--surface-2); position: sticky; top: 0; }
+td { padding: .65rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 th[data-sort] { cursor: pointer; user-select: none; }
 th[data-sort]:hover { color: var(--ink); }
-th[data-dir="asc"]::after { content: " ▲"; } th[data-dir="desc"]::after { content: " ▼"; }
-td.actions { white-space: nowrap; }
-td.actions button { font-size: .8rem; padding: .25rem .55rem; margin-right: .3rem; }
-button.danger { color: var(--no); border-color: #f1c4bf; }
-button.danger:hover { background: var(--no-bg); }
-table { width: 100%; border-collapse: collapse; }
-th { text-align: left; font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); font-weight: 600; }
-th, td { padding: .6rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th[data-dir="asc"]::after { content: " ↑"; } th[data-dir="desc"]::after { content: " ↓"; }
 tbody tr { cursor: pointer; }
-tbody tr:hover { background: #f8fafc; }
-td .why { color: var(--muted); font-size: .85rem; }
-.empty { color: var(--muted); text-align: center; padding: 1.5rem; }
-/* Detalhe */
-#detail { position: fixed; inset: 0; background: rgba(15, 25, 40, .35); display: none; z-index: 10; }
+tbody tr:hover td { background: #fafbfd; }
+td .sub { color: var(--ink-3); font-size: 12px; }
+td:first-child { font-family: var(--font-data); font-size: 12.5px; }
+td.actions { white-space: nowrap; text-align: right; }
+td.actions button { font-size: .78rem; padding: .25rem .55rem; margin-left: .25rem; }
+.empty { color: var(--ink-3); text-align: center; padding: 2rem; }
+.badge { display: inline-flex; align-items: center; gap: .35rem; font-size: .78rem; font-weight: 600; padding: .14rem .55rem .14rem .3rem;
+  border-radius: 999px; white-space: nowrap; }
+.badge .icon { width: 15px; height: 15px; font-size: 9px; }
+.b-deferido { background: var(--good-bg); color: var(--good-ink); }
+.b-indeferido { background: var(--critical-bg); color: var(--critical-ink); }
+.b-pendente { background: var(--warning-bg); color: var(--warning-ink); }
+.b-fora_do_fluxo, .b-processando { background: var(--neutral-bg); color: var(--neutral-ink); }
+.tag { font-size: .72rem; color: var(--ink-3); border: 1px solid var(--line); border-radius: 4px; padding: 0 .3rem; margin-left: .3rem; }
+.tag.human { color: var(--brand-2); border-color: #c9daf1; background: var(--accent-soft); }
+.pager { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-top: .8rem; flex-wrap: wrap;
+  font-size: .85rem; color: var(--ink-2); }
+.pager .nav { display: flex; gap: .4rem; align-items: center; }
+.footer-actions { display: flex; gap: .5rem; flex-wrap: wrap; justify-content: flex-end; }
+.footer-actions button { font-size: .82rem; }
+
+/* detalhe */
+#detail { position: fixed; inset: 0; background: rgba(15, 27, 45, .38); display: none; z-index: 10; }
 #detail.on { display: block; }
-#panel { position: absolute; top: 0; right: 0; bottom: 0; width: min(1150px, 100%); background: var(--bg);
-  overflow: auto; box-shadow: -8px 0 30px rgba(0,0,0,.15); }
-#panel header { position: sticky; top: 0; z-index: 1; }
-#panel .body { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 1rem; padding: 1rem 1.5rem; }
-#panel h3 { margin: 0 0 .6rem; font-size: 1rem; }
+#panel { position: absolute; inset: 0 0 0 auto; width: min(1180px, 100%); background: var(--bg); overflow: auto;
+  box-shadow: -12px 0 32px rgba(15, 27, 45, .18); }
+#panel > header { position: sticky; top: 0; z-index: 3; background: var(--surface); border-bottom: 1px solid var(--line);
+  padding: .9rem 1.4rem; display: flex; justify-content: space-between; gap: 1rem; align-items: center; flex-wrap: wrap; }
+#panel > header h1 { font: 600 22px/1.15 var(--font-display); }
+#panel > header nav { display: flex; gap: .4rem; align-items: center; }
+#d-sub { color: var(--ink-3); font-size: .82rem; }
+#panel .body { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 1rem; padding: 1rem 1.4rem 2rem; }
+#panel .body > div { display: grid; gap: 1rem; align-content: start; }
+#panel h3 { font-size: .92rem; font-weight: 650; margin-bottom: .6rem; }
+.decision-head { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; margin-bottom: .8rem; }
+.decision-head .k { font-size: .76rem; color: var(--ink-3); text-transform: uppercase; letter-spacing: .04em; }
+.decision-head .v { margin-top: .2rem; }
+.segmented { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+.segmented label { padding: .45rem .9rem; cursor: pointer; font-weight: 500; display: inline-flex; gap: .4rem; align-items: center; }
+.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented label + label { border-left: 1px solid var(--line-strong); }
+.segmented label:has(input:checked) { background: var(--surface-2); box-shadow: inset 0 -2px 0 var(--brand-2); }
+.segmented label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+#decision-form textarea { width: 100%; margin: .6rem 0; }
 .crit { list-style: none; padding: 0; margin: 0; }
-.crit li { display: grid; grid-template-columns: 1.4rem 1fr; gap: .4rem; padding: .5rem 0; border-bottom: 1px solid var(--line); }
+.crit li { display: grid; grid-template-columns: 22px 1fr; gap: .55rem; padding: .55rem 0; border-bottom: 1px solid var(--line); }
 .crit li:last-child { border: 0; }
-.crit .ic { font-weight: 700; text-align: center; }
-.crit .atendido .ic { color: var(--ok); } .crit .impedimento .ic { color: var(--no); }
-.crit .pendente .ic { color: var(--wait); } .crit .cadastral .ic, .crit .aviso .ic, .crit .fora_do_fluxo .ic { color: var(--idle); }
-.crit strong { display: block; font-size: .9rem; }
-.crit span.m { font-size: .88rem; color: #334155; }
-.pages { display: inline-flex; gap: .3rem; flex-wrap: wrap; margin-left: .3rem; }
-.pages button { font-size: .78rem; padding: .05rem .45rem; }
-#opinion { white-space: pre-wrap; font: .85rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-  background: #fff; border: 1px solid var(--line); border-radius: .5rem; padding: .8rem; max-height: 22rem; overflow: auto; margin: 0; }
-#viewer-box { position: sticky; top: 4.2rem; }
-#viewer { width: 100%; border: 1px solid var(--line); border-radius: .5rem; background: #fff; min-height: 10rem; }
-#viewer-bar { display: flex; gap: .5rem; align-items: center; margin-bottom: .5rem; flex-wrap: wrap; }
-#viewer-bar select { max-width: 100%; flex: 1; }
-details { margin-top: .6rem; }
-summary { cursor: pointer; color: var(--brand); }
-#notes label { display: block; margin: .45rem 0; font-size: .88rem; }
-#notes input, #notes textarea { width: 100%; }
-#page-list { font-size: .85rem; padding-left: 1rem; }
-#page-list li { margin: .3rem 0; }
-footer { text-align: center; color: var(--muted); font-size: .8rem; padding: 1rem; }
-footer button { font-size: .8rem; }
+.crit strong { display: block; font-size: .86rem; font-weight: 600; }
+.crit span.m { font-size: .84rem; color: var(--ink-2); }
+.pages { display: inline-flex; gap: .25rem; flex-wrap: wrap; margin-left: .3rem; }
+.pages button { font-size: .72rem; padding: .02rem .4rem; }
+#opinion { white-space: pre-wrap; font: .8rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 8px; padding: .8rem; max-height: 22rem; overflow: auto; margin: 0; }
+#viewer-box { position: sticky; top: 4.6rem; }
+#viewer { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-height: 12rem; }
+#viewer-bar { display: flex; gap: .5rem; align-items: center; margin-bottom: .6rem; flex-wrap: wrap; font-size: .82rem; }
+#viewer-bar select { flex: 1; max-width: 100%; }
+details > summary { cursor: pointer; color: var(--brand-2); font-weight: 500; }
+#notes label { display: block; margin: .45rem 0; font-size: .84rem; color: var(--ink-2); }
+#notes input, #notes textarea { width: 100%; margin-top: .15rem; }
+#page-list { font-size: .82rem; padding-left: 1.1rem; }
+dialog { border: 1px solid var(--line); border-radius: 12px; padding: 1.2rem 1.4rem; max-width: min(900px, 95vw); box-shadow: 0 20px 50px rgba(15,27,45,.25); }
+dialog::backdrop { background: rgba(15, 27, 45, .4); }
+dialog ul { padding-left: 1.1rem; }
+.status-line { font-size: .82rem; color: var(--ink-3); }
+@media (max-width: 1100px) { .charts, .intake { grid-template-columns: 1fr; } }
 @media (max-width: 860px) { #panel .body { grid-template-columns: 1fr; } #viewer-box { position: static; } }
 </style>
 
-<header>
-  <div><h1>Isenção de IPTU 2027</h1><small>Conferência automática de processos · LC 456/2025</small></div>
+<div class="topbar"><div class="inner">
+  <div class="brand"><img id="logo" src="/marca/logo" alt="Prefeitura Municipal de Franca" hidden
+      onload="this.hidden=false;document.getElementById('logo-mark').hidden=true">
+    <div class="mark" id="logo-mark" aria-hidden="true">IP</div>
+    <div><h1>Isenção de IPTU <span id="exercicio">2027</span> <span class="tag-env">SIGPMF</span></h1>
+      <small>Prefeitura Municipal de Franca · análise automática de requerimentos · LC 456/2025</small></div></div>
   <nav>
     <label>Lote <select id="batches"><option value="">Todos os lotes</option></select></label>
-    <a href="/diagnostico">Diagnóstico</a>
+    <a href="/diagnostico">Conexões</a>
   </nav>
-</header>
+</div></div>
 
 <main>
-  <section id="drop">
-    <h2>Arraste a pasta dos processos aqui</h2>
-    <p>Pode ser a pasta de um processo ou uma pasta com vários processos (uma subpasta por processo).</p>
-    <button class="primary" id="pick-folder" type="button">Selecionar pasta</button>
-    <div class="alt">ou <button class="link" id="pick-file" type="button">enviar um arquivo PDF, ZIP ou foto</button></div>
-    <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
-    <input id="file-input" type="file" accept=".pdf,.zip,.jpg,.jpeg,.png,.webp" hidden>
+  <!-- Indicadores -->
+  <section class="kpis" aria-label="Indicadores">
+    <div class="card kpi"><div class="label"><span class="icon i-brand" aria-hidden="true">#</span>Processados</div>
+      <div class="value" id="k-processados">—</div><div class="sub" id="k-processados-sub"></div></div>
+    <div class="card kpi"><div class="label"><span class="icon i-good" aria-hidden="true">✓</span>Aceitos</div>
+      <div class="value" id="k-aceitos">—</div><div class="sub" id="k-aceitos-sub"></div></div>
+    <div class="card kpi"><div class="label"><span class="icon i-critical" aria-hidden="true">✕</span>Não aceitos</div>
+      <div class="value" id="k-nao">—</div><div class="sub" id="k-nao-sub"></div></div>
+    <div class="card kpi"><div class="label"><span class="icon i-warning" aria-hidden="true">!</span>Revisão manual</div>
+      <div class="value" id="k-revisao">—</div><div class="sub" id="k-revisao-sub"></div></div>
+    <div class="card kpi"><div class="label"><span class="icon i-brand" aria-hidden="true">⏱</span>Tempo médio por cidadão</div>
+      <div class="value" id="k-tempo">—</div><div class="sub" id="k-tempo-sub"></div></div>
   </section>
 
-  <section class="card" id="job" aria-live="polite">
-    <div class="steps"><span data-step="preparar">Preparar</span><span data-step="enviar">Enviar</span>
-      <span data-step="ler">Ler documentos</span><span data-step="pronto">Pareceres prontos</span></div>
-    <progress id="progress" max="1" value="0"></progress>
-    <p id="job-text"></p>
+  <section class="charts">
+    <div class="card"><div class="card-head"><h2>Processos analisados por dia</h2><span class="muted">últimos 14 dias · por decisão</span></div>
+      <div class="chart" id="chart-volume"></div>
+      <div class="legend" aria-hidden="true">
+        <span><span class="icon i-good">✓</span>Aceito</span><span><span class="icon i-critical">✕</span>Não aceito</span>
+        <span><span class="icon i-warning">!</span>Revisão manual</span><span><span class="icon i-neutral">→</span>Fora do fluxo</span></div>
+      <details class="data-table"><summary>Ver os dados</summary><div id="table-volume"></div></details>
+    </div>
+    <div class="card"><div class="card-head"><h2>Tempo médio de análise por cidadão</h2><span class="muted">últimos 14 dias</span></div>
+      <div class="chart" id="chart-tempo"></div>
+      <details class="data-table"><summary>Ver os dados</summary><div id="table-tempo"></div></details>
+    </div>
   </section>
 
+  <!-- Envio e lotes -->
+  <section class="intake">
+    <div id="drop" class="card">
+      <h2>Enviar processos</h2>
+      <p>Arraste aqui a pasta de um processo ou uma pasta com vários processos (uma subpasta por processo).</p>
+      <div><button class="primary" id="pick-folder" type="button">Selecionar pasta</button>
+        <button class="link" id="pick-file" type="button" style="margin-left:.8rem">ou um arquivo PDF, ZIP ou foto</button></div>
+      <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
+      <input id="file-input" type="file" accept=".pdf,.zip,.jpg,.jpeg,.png,.webp" hidden>
+      <div id="job" aria-live="polite">
+        <div class="steps"><span data-step="preparar">Preparar</span><span data-step="enviar">Enviar</span>
+          <span data-step="ler">Ler documentos</span><span data-step="pronto">Pareceres prontos</span></div>
+        <div class="bar"><i id="progress-bar"></i></div>
+        <p id="job-text"></p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Lotes enviados</h2><span class="muted" id="lots-config"></span></div>
+      <div class="lots" id="lots"><p class="muted small">Nenhum lote enviado.</p></div>
+    </div>
+  </section>
+
+  <!-- Processos -->
   <section class="card">
+    <div class="card-head"><h2>Processos</h2><span class="muted" id="list-count"></span></div>
     <div class="toolbar">
       <input id="search" type="search" placeholder="Buscar por processo, requerente, CPF, inscrição, síntese ou motivo"
              aria-label="Buscar processos" autocomplete="off">
-      <div class="exports"><a id="json-all" download="pareceres-iptu.json">Exportar JSON</a>
-        <a id="csv" download="pareceres-iptu.csv">Exportar CSV</a></div>
+      <div class="exports"><a id="json-all" download="pareceres-iptu.json"><button type="button" tabindex="-1">Exportar JSON</button></a>
+        <a id="csv" download="pareceres-iptu.csv"><button type="button" tabindex="-1">Exportar CSV</button></a></div>
     </div>
-    <div class="counts" id="counts" role="group" aria-label="Filtrar pelo resultado da análise"></div>
-    <table>
-      <thead><tr>
-        <th data-sort="processo">Processo</th><th data-sort="requerente">Requerente</th>
-        <th data-sort="resultado">Resultado</th><th>Síntese / motivo</th>
-        <th data-sort="atualizado">Atualizado</th><th>Ações</th>
-      </tr></thead>
-      <tbody id="rows"><tr><td class="empty" colspan="6">Carregando…</td></tr></tbody>
-    </table>
+    <div class="chips" id="counts" role="group" aria-label="Filtrar pela decisão"></div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th data-sort="processo">Processo</th><th data-sort="requerente">Requerente</th>
+          <th data-sort="decisao">Decisão</th><th>Síntese / motivo</th>
+          <th data-sort="atualizado">Atualizado</th><th style="text-align:right">Ações</th>
+        </tr></thead>
+        <tbody id="rows"><tr><td class="empty" colspan="6">Carregando…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="pager">
+      <div><label>Por página <select id="page-size"><option>25</option><option selected>50</option><option>100</option><option>200</option></select></label></div>
+      <div class="nav"><button id="prev" type="button">‹ Anterior</button><span id="page-info"></span>
+        <button id="next" type="button">Próxima ›</button></div>
+      <div class="footer-actions">
+        <button id="reanalisar" type="button" hidden>Reanalisar lote</button>
+        <button id="avaliar" type="button" hidden>Comparar com gabarito</button>
+        <button id="diagnostico" type="button" hidden>Diagnóstico do lote</button>
+        <input id="gabarito" type="file" accept=".json,application/json" hidden>
+      </div>
+    </div>
+    <p class="status-line" id="footer-status"></p>
   </section>
-
-  <footer>
-    <button id="reanalisar" type="button" hidden>Reanalisar lote</button>
-    <button id="avaliar" type="button" hidden>Comparar com gabarito</button>
-    <button id="diagnostico" type="button" hidden>Diagnóstico do lote</button>
-    <input id="gabarito" type="file" accept=".json,application/json" hidden>
-    <span id="footer-status"></span>
-  </footer>
 </main>
 
-<dialog id="eval-box" style="max-width:min(900px,95vw);border:1px solid var(--line);border-radius:.8rem">
-  <h3 style="margin-top:0">Assertividade do lote</h3><div id="eval-body"></div>
-  <form method="dialog"><button>Fechar</button></form>
+<dialog id="eval-box">
+  <h3 style="margin-bottom:.6rem">Assertividade do lote</h3><div id="eval-body"></div>
+  <form method="dialog" style="margin-top:1rem;text-align:right"><button>Fechar</button></form>
 </dialog>
+
 <div id="detail" role="dialog" aria-modal="true" aria-labelledby="d-title">
   <div id="panel">
     <header>
-      <div><h1 id="d-title">Processo</h1><small id="d-sub"></small></div>
+      <div><h1 id="d-title">Processo</h1><div id="d-sub"></div></div>
       <nav><span id="d-badge" class="badge"></span>
-        <button id="rerun-process" type="button" title="Lê de novo todas as páginas deste processo">Reanalisar processo</button>
+        <button id="rerun-process" type="button" title="Lê de novo todas as páginas deste processo">Reanalisar</button>
         <button id="delete-process" type="button" class="danger">Excluir</button>
         <button id="close" type="button">Fechar</button></nav>
     </header>
     <div class="body">
       <div>
+        <section class="card" id="decision">
+          <h3>Decisão final</h3>
+          <div class="decision-head">
+            <div><div class="k">Sugestão da IA</div><div class="v" id="d-ia"></div></div>
+            <div><div class="k">Decisão registrada</div><div class="v" id="d-final"></div></div>
+          </div>
+          <form id="decision-form">
+            <div class="segmented" role="radiogroup" aria-label="Decisão">
+              <label><input type="radio" name="resultado" value="deferido" required><span class="icon i-good" aria-hidden="true">✓</span>Deferir</label>
+              <label><input type="radio" name="resultado" value="indeferido"><span class="icon i-critical" aria-hidden="true">✕</span>Indeferir</label>
+            </div>
+            <textarea name="justificativa" rows="3" minlength="10" maxlength="2000" required
+                      placeholder="Justificativa da decisão (obrigatória, mínimo de 10 caracteres)"></textarea>
+            <button class="primary" type="submit">Salvar decisão</button> <span id="decision-status" class="small muted"></span>
+          </form>
+        </section>
         <section class="card">
           <h3>Requisitos</h3>
           <ul class="crit" id="criteria"></ul>
         </section>
         <section class="card">
-          <div class="toolbar" style="margin:0 0 .5rem"><h3 style="margin:0">Parecer</h3>
-            <div><button id="copy" type="button">Copiar</button> <a id="json">Exportar JSON</a></div></div>
+          <div class="card-head" style="margin-bottom:.5rem"><h3 style="margin:0">Parecer da IA</h3>
+            <div><button id="copy" type="button">Copiar</button> <a id="json"><button type="button" tabindex="-1">Exportar JSON</button></a></div></div>
           <pre id="opinion"></pre>
         </section>
         <section class="card">
           <details>
-            <summary>Conferência manual</summary>
+            <summary>Conferência manual dos requisitos</summary>
             <form id="notes">
-              <p class="why">Preencha somente o que você conferiu. A conferência substitui a análise automática do item.</p>
+              <p class="small muted">Preencha somente o que você conferiu. A conferência substitui a análise automática do item.</p>
               <label>Identidade e composição familiar <input name="identidade" maxlength="500"></label>
               <label>Titularidade do benefício <input name="beneficio" maxlength="500"></label>
               <label>Vínculo e imóvel único no cadastro <input name="imovel" maxlength="500"></label>
@@ -192,10 +361,10 @@ footer button { font-size: .8rem; }
               <label>Renda bruta familiar mensal (R$) <input name="renda" inputmode="decimal" placeholder="3242,00"></label>
               <label>Fonte e competência da renda <input name="fonte_renda" maxlength="500"></label>
               <label>Nota de revisão <textarea name="nota" id="note" rows="3" maxlength="2000" required></textarea></label>
-              <button class="primary" type="submit">Salvar conferência</button> <span id="note-status"></span>
+              <button class="primary" type="submit">Salvar conferência</button> <span id="note-status" class="small muted"></span>
             </form>
           </details>
-          <details>
+          <details style="margin-top:.6rem">
             <summary>Páginas lidas</summary>
             <ol id="page-list"></ol>
           </details>
@@ -203,8 +372,8 @@ footer button { font-size: .8rem; }
       </div>
       <div id="viewer-box">
         <section class="card">
-          <div id="viewer-bar"><select id="files"></select><span id="page-label"></span>
-            <a id="original" hidden>Baixar</a></div>
+          <div id="viewer-bar"><select id="files" aria-label="Documento"></select><span id="page-label"></span>
+            <a id="original" hidden>Baixar original</a></div>
           <img id="viewer" alt="Página do documento">
         </section>
       </div>

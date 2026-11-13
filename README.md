@@ -56,6 +56,64 @@ Cada documento traz `lote`, `processo` (número SEI e arquivos), `resultado`
 (critérios com páginas de origem, fatos lidos, renda, síntese e texto do parecer), `conferencia_manual`,
 `cadastro_sil`, `versao_regras` e `gerado_em`. Use Basic Auth com o usuário do painel.
 
+### Decisão final, revisão humana e duplicidade
+
+No detalhe do processo (**Analisar**), o servidor registra a **decisão final** — Deferir (aceito) ou Indeferir
+(não aceito) — com justificativa obrigatória, inclusive contrária à sugestão da IA. O parecer da IA é
+preservado; a decisão humana fica registrada com usuário e data e gera nova versão no histórico. A origem é
+**100% IA** quando ninguém revisou e **revisão humana** quando houve conferência manual ou decisão de um
+servidor. Indicadores, filtros e exportação usam a decisão final.
+
+Rótulos exibidos: Aceito (`deferido`), Não aceito (`indeferido`), Revisão manual (`pendente`, antes "em
+análise") e Fora do fluxo. Os códigos internos do parecer (`enquadra`, `em_analise`…) não mudaram.
+
+**Possível duplicidade** (mesmo exercício): mesmo número SEI em outro lote (reenvio), mesmo CPF do requerente,
+CPF do requerente igual ao CPF do cônjuge em outro processo, ou mesma inscrição imobiliária. O sistema marca
+e lista os processos relacionados (filtro "Possíveis duplicidades"); a decisão continua com o servidor.
+
+Logins individuais: `IPTU_USUARIOS="ana:senha-da-ana;joao:senha-do-joao"` (senhas com 12+ caracteres), para
+que a trilha registre quem decidiu. O login `IPTU_ADMIN_USER`/`IPTU_ADMIN_PASSWORD` continua valendo.
+
+### API de integração (`/api/v1`)
+
+Autenticação: `Authorization: Bearer <IPTU_API_TOKEN>` (24+ caracteres; dá acesso só a `/api/v1`) ou o login
+do painel.
+
+- `GET /api/v1/processos/<número SEI>` (com `/` ou `-`) — processo mais recente com esse número.
+- `GET /api/v1/processos?desde=2026-11-01T00:00:00&decisao=deferido&pagina=1&por_pagina=100` — o que mudou
+  desde a data (sincronização incremental), paginado.
+
+```json
+{
+  "numero_sei": "3516200.410.00010901-2026-84", "aceito": false,
+  "decisao": "indeferido", "decisao_ia": "deferido",
+  "origem_decisao": "revisao_humana", "revisao_humana": true, "revisado_por": "ana",
+  "justificativa": "Edícula ocupada por irmão…",
+  "processado_em": "2026-11-13T14:31:54-0300", "decidido_em": "2026-11-13T14:32:47-0300",
+  "dados_do_aceite": {"requerente": "…", "cpf": "…", "inscricao_imobiliaria": "…", "modalidade": "aposentadoria",
+                      "renda_familiar_centavos": 162100, "exercicio": 2027, "sintese": "…",
+                      "fundamentos": [{"criterio": "renda", "situacao": "atendido", "motivo": "…"}]},
+  "parecer_texto": "PARECER — ISENÇÃO DE IPTU 2027 …",
+  "possiveis_duplicidades": [{"numero_sei": "…", "motivo": "mesmo CPF do requerente em outro processo"}]
+}
+```
+
+`aceito` é `true` para deferido, `false` para indeferido e `null` enquanto pendente ou fora do fluxo.
+
+### Lotes grandes
+
+Cada lote é separado em processos assim que o envio termina (os processos aparecem como "Na fila"), mesmo com
+outro lote em leitura. Até `IPTU_LOTES_SIMULTANEOS` (padrão 3) lotes são lidos ao mesmo tempo, dividindo as
+`IPTU_PAGE_WORKERS` vagas. O painel **Lotes enviados** mostra o estado de cada envio (enviando, separando,
+lendo x de y páginas, concluído, falha com motivo). O ZIP enviado é apagado após a separação (os arquivos
+extraídos ficam), o que poupa ~1 GB de disco por lote. Reserve no volume `/data` cerca de 1,2× o tamanho dos
+lotes que serão mantidos.
+
+### Visual e logotipo
+
+O painel segue a identidade do SIGPMF (IBM Plex, azul #0066CC, modo escuro automático). Para exibir o
+logotipo oficial, coloque `logo.svg` (ou `.png`, `.jpg`, `.webp`) em `/data/marca/` no servidor.
+
 ### Parâmetros do exercício
 
 `IPTU_EXERCICIO` (2027), `IPTU_SALARIO_MINIMO_CENTAVOS` (162100; o teto é o dobro) e, opcionalmente,
