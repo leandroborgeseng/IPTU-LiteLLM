@@ -12,7 +12,7 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
-from threading import Event, RLock, Thread
+from threading import BoundedSemaphore, Event, Lock, RLock, Thread
 
 import parecer
 import sil
@@ -32,6 +32,28 @@ PROCESS_ID = re.compile(r"(?<![0-9])[0-9]{7}\.[0-9]{3}\.[0-9]{8}-[0-9]{4}-[0-9]{
 ID = re.compile(r"[a-f0-9]{32}")
 WAKE = Event()
 LOCK = RLock()
+
+
+def available_cpus():
+    """Núcleos realmente disponíveis ao container (cota do cgroup), não os do host."""
+    try:
+        quota, period = Path("/sys/fs/cgroup/cpu.max").read_text().split()[:2]
+        if quota != "max":
+            return max(1, int(int(quota) / int(period)))
+    except (OSError, ValueError):
+        pass
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, os.cpu_count() or 1)
+
+
+# Renderização é CPU pesada: limitada aos núcleos do container e com prioridade baixa,
+# para o servidor web continuar respondendo (envio de lotes, painel) durante o processamento.
+RENDER_SLOTS = BoundedSemaphore(int(os.environ.get("IPTU_RENDER_WORKERS", "0") or 0)
+                                or max(1, available_cpus() - 1))
+NICE = ["nice", "-n", "15"] if shutil.which("nice") else []
+UPLOAD_LOCKS = {}
 KINDS = ("requerimento", "identidade", "cpf", "residencia", "beneficio", "posse",
          "procuracao", "certidao", "laudo", "holerite", "execucao_fiscal",
          "peticao_judicial", "despacho", "capa", "carnê_iptu", "imunidade_tributaria", "outro")
@@ -133,27 +155,35 @@ def describe(path):
     return value
 
 
-def append(path, start, data):
+def append(path, start, data, timing=None):
+    """Grava uma parte do envio. Usa uma trava por lote: o fsync não bloqueia o resto do servidor."""
+    check_reset()
     with LOCK:
-        check_reset()
+        lock = UPLOAD_LOCKS.setdefault(path.name, Lock())
+    with lock:
         value = describe(path)
         if value["status"] != "recebendo" or start != value["recebido"]:
             return 409, value
         if not data or start + len(data) > value["bytes"]:
             return 400, {"status": "parte_invalida"}
+        began = time.monotonic()
         with (path / "upload").open("ab") as target:
             try:
                 target.write(data)
                 target.flush()
+                written = time.monotonic()
                 os.fsync(target.fileno())
             except OSError:
                 target.truncate(start)
                 raise
+        if timing is not None:
+            timing.update(escrita_s=written - began, fsync_s=time.monotonic() - written)
         return 200, describe(path)
 
 
 def queue(path):
     with LOCK:
+        UPLOAD_LOCKS.pop(path.name, None)
         check_reset()
         value = describe(path)
         if value["status"] == "recebendo" and value["bytes"] == value["recebido"]:
@@ -302,6 +332,11 @@ def inventory(path, name):
 
 
 def render_page(pdf, number, extension=".pdf", size=1800, gray=True):
+    with RENDER_SLOTS:
+        return _render_page(pdf, number, extension, size, gray)
+
+
+def _render_page(pdf, number, extension, size, gray):
     if extension in IMAGE_FORMATS:
         if number != 1:
             return None
@@ -321,7 +356,7 @@ def render_page(pdf, number, extension=".pdf", size=1800, gray=True):
     with tempfile.TemporaryDirectory() as tmp:
         png = Path(tmp) / "pagina.png"
         completed = subprocess.run(
-            ["pdftoppm", "-f", str(number), "-l", str(number), "-singlefile",
+            [*NICE, "pdftoppm", "-f", str(number), "-l", str(number), "-singlefile",
              "-scale-to", str(size), *(["-gray"] if gray else []), "-png", str(pdf), str(png.with_suffix(""))],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
         )
@@ -350,7 +385,7 @@ def html_text(path):
 def native_page_text(pdf, number):
     try:
         completed = subprocess.run(
-            ["pdftotext", "-f", str(number), "-l", str(number), "-layout", str(pdf), "-"],
+            [*NICE, "pdftotext", "-f", str(number), "-l", str(number), "-layout", str(pdf), "-"],
             capture_output=True, timeout=20,
         )
         if completed.returncode == 0:
@@ -498,7 +533,7 @@ def process_batch(path, analyze):
                 save(count_path, {"paginas": 1, "total": 1})
             if not count_path.exists():
                 try:
-                    info = subprocess.run(["pdfinfo", str(pdf)], capture_output=True,
+                    info = subprocess.run([*NICE, "pdfinfo", str(pdf)], capture_output=True,
                                           timeout=15, text=True, env={**os.environ, "LC_ALL": "C"})
                     match = re.search(r"^Pages:\s+(\d+)$", info.stdout, re.MULTILINE)
                     count = int(match[1]) if not info.returncode and match else 0
@@ -560,6 +595,9 @@ def process_batch(path, analyze):
 
 
 def run_worker(analyze):
+    print(f"Worker: {available_cpus()} CPU(s) no container; renderização em até "
+          f"{RENDER_SLOTS._initial_value} página(s) por vez; {page_workers()} página(s) em leitura paralela.",
+          flush=True)
     while True:
         WAKE.clear()
         if reset_pending():

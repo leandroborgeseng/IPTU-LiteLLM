@@ -520,15 +520,20 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                 if parts[3] == "parte":
                     start = int(self.headers.get("Upload-Offset", ""))
                     began = time.monotonic()
+                    timing = {}
                     try:
                         data = self.read_bounded(batch.CHUNK)
-                        code, result = batch.append(path, start, data)
+                        received = time.monotonic()
+                        code, result = batch.append(path, start, data, timing)
                     except Exception as error:
                         print(f"Upload {parts[2][:8]} offset {start}: {type(error).__name__} "
                               f"após {time.monotonic() - began:.1f} s", flush=True)
                         raise
-                    print(f"Upload {parts[2][:8]} offset {start}: HTTP {code}, {len(data)} bytes em "
-                          f"{time.monotonic() - began:.1f} s", flush=True)
+                    total = time.monotonic() - began
+                    print(f"Upload {parts[2][:8]} offset {start}: HTTP {code}, {len(data)} bytes em {total:.1f} s "
+                          f"(rede {received - began:.1f} s, escrita {timing.get('escrita_s', 0):.1f} s, "
+                          f"fsync {timing.get('fsync_s', 0):.1f} s, espera {total - (received - began) - sum(timing.values()):.1f} s)",
+                          flush=True)
                     self.send_json(code, result)
                     return
                 if parts[3] == "reanalisar":
@@ -673,6 +678,12 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
             return
         except OSError:
             self.send_json(507, {"status": "falha_de_armazenamento"})
+        except Exception as error:  # responde em vez de derrubar a conexão sem resposta
+            print(f"Erro em {self.command} {urlsplit(self.path).path}: {type(error).__name__}: {error}", flush=True)
+            try:
+                self.send_json(500, {"status": "erro_interno"})
+            except OSError:
+                pass
 
     def read_bounded(self, limit):
         length = int(self.headers.get("Content-Length", "0"))
