@@ -327,10 +327,12 @@ def extract_form_page(model, png, *, show_preview=False, inventory=False, texts=
     )
     if inventory:
         fields = {"tipo": str, "evidencia_tipo": str, "texto_ocr": str, **batch.FIELDS,
-                  **{key: batch.ASSESSMENT_FIELDS[key] for key in batch.INCOME_FIELDS | batch.ID_FIELDS}}
+                  **{key: batch.ASSESSMENT_FIELDS[key]
+                     for key in batch.INCOME_FIELDS | batch.ID_FIELDS | batch.DEED_FIELDS}}
         prompt += (
-            " Transcreva todo o texto legível da imagem no campo texto_ocr, preservando "
-            "as quebras de linha. Devolva texto_ocr vazio apenas para página sem texto legível. "
+            " Em texto_ocr transcreva SOMENTE o início da página: o título e as primeiras linhas, até "
+            "cerca de 600 caracteres, preservando as quebras de linha (não transcreva a página inteira). "
+            "Devolva texto_ocr vazio apenas para página sem texto legível. "
             "Classifique a página usando tipo com um destes valores: "
             + ", ".join(batch.KINDS)
             + ". Adicione as chaves nome_requerente, cpf_requerente, cpf_conjuge, "
@@ -347,6 +349,9 @@ def extract_form_page(model, png, *, show_preview=False, inventory=False, texts=
               "Em documento de identidade, CNH ou CPF, extraia nome_documento, cpf_documento e "
               "filiacao_documento (pai / mãe). Use posse para escritura, matrícula, contrato, testamento, "
               "formal de partilha ou outro documento que atribua propriedade, usufruto ou posse do imóvel. "
+              "Em documento de posse, extraia nomes_citados (nomes das pessoas que constam como proprietário, "
+              "comprador, donatário, herdeiro, legatário ou usufrutuário, separados por \";\") e "
+              "usufruto_citado (true se o documento institui ou menciona usufruto). "
               "Use procuracao apenas quando o documento outorgar poderes a um representante. "
               "Peças de execução fiscal, petições judiciais, capas, imunidade tributária e carnês "
               "têm categorias próprias. CPF deve conter 11 dígitos; CNPJ não é CPF. "
@@ -360,7 +365,7 @@ def extract_form_page(model, png, *, show_preview=False, inventory=False, texts=
     body = {
         "model": model,
         "stream": False,
-        "max_tokens": 6144 if inventory else 512,
+        "max_tokens": 2048 if inventory else 512,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image}"}},
@@ -422,7 +427,8 @@ def extract_form_page(model, png, *, show_preview=False, inventory=False, texts=
         result["evidencia_tipo"] = value.pop("evidencia_tipo", None)
         if result["tipo"] != "requerimento":
             allowed = (batch.INCOME_FIELDS if result["tipo"] in {"beneficio", "holerite"}
-                       else batch.ID_FIELDS if result["tipo"] in {"identidade", "cpf"} else set())
+                       else batch.ID_FIELDS if result["tipo"] in {"identidade", "cpf"}
+                       else batch.DEED_FIELDS if result["tipo"] == "posse" else set())
             # Guarda os campos de formulário: a página pode ser continuação do requerimento.
             result["obtido_bruto"] = {key: field for key, field in value.items()
                                       if field is not None and key not in batch.INCOME_FIELDS | batch.ID_FIELDS}

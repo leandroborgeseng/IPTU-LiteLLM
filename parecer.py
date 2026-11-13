@@ -409,11 +409,19 @@ def assess(process, review, cadastro=None):
     cadastro = cadastro or {}
     registration = unique("inscricao_imobiliaria")
     deeds = [row for row in readable if row.get("tipo") == "posse"]
-    mentions = [row for row in deeds if applicant_key and applicant_key in person_key(page_text(row))]
+    def cites_applicant(row):
+        names = re.split(r"[;\n]", (row.get("obtido") or {}).get("nomes_citados") or "")
+        return bool(applicant_key) and (applicant_key in person_key(page_text(row))
+                                        or any(same_person(name, applicant) for name in names if name.strip()))
+
+    def cites_usufruct(row):
+        return (row.get("obtido") or {}).get("usufruto_citado") is True or "usufruto" in page_text(row)
+
+    mentions = [row for row in deeds if cites_applicant(row)]
     notes = []
     if mentions:
         notes.append(f"documento de vínculo cita o requerente ({where(mentions)})")
-        if flag("usufrutuario") is False and any("usufruto" in page_text(row) for row in mentions):
+        if flag("usufrutuario") is False and any(cites_usufruct(row) for row in mentions):
             notes.append("o documento indica usufruto, mas o requerimento marcou que não é usufrutuário")
     elif deeds:
         notes.append(f"documento de vínculo localizado ({where(deeds)}) sem o nome do requerente")

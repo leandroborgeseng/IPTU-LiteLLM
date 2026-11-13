@@ -109,6 +109,33 @@ def is_form_page(text):
     return "conjuge ou companheiro" in words and ("socio de empresa" in words or "trabalha registrado" in words)
 
 
+# Indicam documentos usados no parecer. Palavras genéricas de processo tributário (IPTU, imóvel,
+# isenção, certidão do cabeçalho do SEI) não entram: o formulário é detectado à parte.
+IMPORTANT_WORDS = ("beneficio", "inss", "renda mensal", "demonstrativo de credito", "holerite", "salario",
+                   "carteira de identidade", "registro geral", "habilitacao", "escritura", "matricula",
+                   "testamento", "usufruto", "procuracao", "obito", "casamento")
+
+
+def text_only_kind(text):
+    """Classifica sem o modelo uma página com texto digital que não interessa ao parecer.
+
+    Retorna o tipo (despacho, capa, execucao_fiscal, outro) ou None quando a página deve
+    passar pelo modelo (pouco texto, formulário, extrato, identidade, documento do imóvel).
+    """
+    if len((text or "").strip()) < 400 or is_form_page(text):
+        return None
+    words = normalized(text)
+    if any(word in words for word in IMPORTANT_WORDS):
+        return None
+    if "execucao fiscal" in words:
+        return "execucao_fiscal"
+    if "despacho" in words:
+        return "despacho"
+    if "andamento" in words or "processo" in words[:300]:
+        return "capa"
+    return "outro"
+
+
 def _fold(text):
     text = unicodedata.normalize("NFKD", str(text).casefold())
     return "".join(c for c in text if not unicodedata.combining(c)).strip()

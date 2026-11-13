@@ -224,3 +224,28 @@ class ModalidadePeloBeneficio(unittest.TestCase):
         for key in ("beneficio_aposentadoria_numero", "beneficio_pensao_numero"):
             form[key] = None
         self.assertEqual(parecer.assess(process, None)["modalidade"], "aposentadoria+pensao")
+
+
+class PaginasSemModelo(unittest.TestCase):
+    ANDAMENTO = ("PREFEITURA MUNICIPAL DE FRANCA FOLHA 01 PROCESSO: 2024003642 NOME: DIOCESE ASSUNTO: IMUNIDADE "
+                 "Nro CERTIDÃO: 421445 A N D A M E N T O Data De Para 24/01/2024 PROTOCOLO FISCALIZAÇÃO DE RENDAS "
+                 "IPTU imóvel isenção " * 3)
+
+    def test_andamento_com_texto_digital_dispensa_o_modelo(self):
+        self.assertEqual(leitura.text_only_kind(self.ANDAMENTO), "capa")
+
+    def test_paginas_que_precisam_do_modelo(self):
+        self.assertIsNone(leitura.text_only_kind("pouco texto"))
+        self.assertIsNone(leitura.text_only_kind(self.ANDAMENTO + " ESCRITURA PÚBLICA DE VENDA E COMPRA"))
+        self.assertIsNone(leitura.text_only_kind(self.ANDAMENTO + " DEMONSTRATIVO DE CRÉDITO DE BENEFÍCIO INSS"))
+        self.assertIsNone(leitura.text_only_kind(self.ANDAMENTO + " REQUERIMENTO DE ISENÇÃO DE IPTU 2027"))
+
+
+class NomesCitadosNaEscritura(unittest.TestCase):
+    def test_nome_citado_e_usufruto_sem_texto_completo(self):
+        process = base_process()
+        process["paginas"][-1].update(texto_ocr="ESCRITURA PÚBLICA DE DOAÇÃO",
+                                      obtido={"nomes_citados": "JOSE SOUZA; MARIA D ARC SOUZA", "usufruto_citado": True})
+        motivo = criteria(parecer.assess(process, None))["imovel"]["motivo"]
+        self.assertIn("cita o requerente", motivo)
+        self.assertIn("indica usufruto", motivo)

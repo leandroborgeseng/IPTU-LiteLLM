@@ -77,11 +77,13 @@ ASSESSMENT_FIELDS = {
     "beneficio_bpc_numero": str, "beneficio_bpc_centavos": int,
     "nome_documento": str, "cpf_documento": str, "filiacao_documento": str,
     "nome_ocupante_edicula": str, "cpf_ocupante_edicula": str, "conjuge_beneficio_numero": str,
+    "nomes_citados": str, "usufruto_citado": bool,
 }
+DEED_FIELDS = {"nomes_citados", "usufruto_citado"}
 INCOME_FIELDS = {"renda_bruta_centavos", "competencia_renda", "titular_renda",
                  "numero_beneficio", "especie_beneficio"}
 ID_FIELDS = {"nome_documento", "cpf_documento", "filiacao_documento"}
-PAGE_SCHEMA = 9
+PAGE_SCHEMA = 10
 
 
 class ResetRequested(Exception):
@@ -463,29 +465,37 @@ def process_page(pdf, number, evidence, analyze, extension=".pdf"):
     stage = "renderizacao_ms"
     started = time.monotonic()
     try:
-        image = render_page(pdf, number, extension)
+        if extension == ".pdf":
+            stage = "texto_pdf_ms"
+            texts = native_page_text(pdf, number)
+            timing[stage] = round((time.monotonic() - started) * 1000)
+            kind = leitura.text_only_kind(texts.get("texto_pdf"))
+            if kind:
+                # Texto digital de andamento, despacho ou lista: classificado sem chamar o modelo.
+                if os.environ.get("IPTU_CACHE_PREVIEWS") == "1":
+                    preview = render_page(pdf, number, extension)
+                    if preview is not None:
+                        cache_preview(evidence, preview)
+                save(evidence, {"status": "extraido", "tipo": kind, "obtido": {}, **texts, "texto_ocr": "",
+                                "status_ocr": "texto_nativo", "evidencia_tipo": texts["texto_pdf"][:160],
+                                "versao_extracao": PAGE_SCHEMA, "tempos_ms": timing, "tentativas_ia": 0,
+                                "sem_modelo": True})
+                return timing, 0, False
+            check_reset()
+        stage = "renderizacao_ms"
+        started = time.monotonic()
+        image = render_page(pdf, number, extension, size=1600)
         if image is not None:
             timing[stage] = round((time.monotonic() - started) * 1000)
             check_reset()
             if os.environ.get("IPTU_CACHE_PREVIEWS") == "1":
                 cache_preview(evidence, image)
-            if extension == ".pdf":
-                stage = "texto_pdf_ms"
-                started = time.monotonic()
-                texts = native_page_text(pdf, number)
-                timing[stage] = round((time.monotonic() - started) * 1000)
-            check_reset()
             stage = "litellm_ms"
             started = time.monotonic()
             attempts += 1
             # Alta resolução colorida só é gerada se a página precisar de leitura detalhada.
-            hires = lambda: render_page(pdf, number, extension, size=2200, gray=False, jpeg=True)  # noqa: E731
+            hires = lambda: render_page(pdf, number, extension, size=1800, gray=False, jpeg=True)  # noqa: E731
             result = analyze(image, texts, hires=hires)
-            if result["status"] == "falha_de_conexao" or result.get("codigo") in {429, 502, 503, 504}:
-                time.sleep(1)
-                check_reset()
-                attempts += 1
-                result = analyze(image, texts, hires=hires)
     except ResetRequested:
         raise
     except (OSError, subprocess.TimeoutExpired):
