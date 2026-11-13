@@ -1,4 +1,5 @@
 """Persistent pilot imports. Original paths are metadata, never filesystem destinations."""
+import hashlib
 import io
 import json
 import os
@@ -14,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 from threading import BoundedSemaphore, Event, Lock, RLock, Thread
 
+import historico
 import leitura
 import parecer
 import sil
@@ -154,7 +156,8 @@ def create(name, size):
 
 def describe(path):
     value = load(path / "batch.json")
-    value["recebido"] = (path / "upload").stat().st_size
+    upload = path / "upload"
+    value["recebido"] = upload.stat().st_size if upload.exists() else value.get("bytes", 0)
     return value
 
 
@@ -334,12 +337,13 @@ def inventory(path, name):
     return list(processes.values())
 
 
-def render_page(pdf, number, extension=".pdf", size=1800, gray=True, jpeg=False):
+def render_page(pdf, number, extension=".pdf", size=1800, gray=True, jpeg=True):
+    """Renderiza uma página. JPEG por padrão: a compressão PNG custava ~1,4 s por página digitalizada."""
     with RENDER_SLOTS:
         return _render_page(pdf, number, extension, size, gray, jpeg)
 
 
-def _render_page(pdf, number, extension, size, gray, jpeg=False):
+def _render_page(pdf, number, extension, size, gray, jpeg=True):
     if extension in IMAGE_FORMATS:
         if number != 1:
             return None
@@ -364,7 +368,7 @@ def _render_page(pdf, number, extension, size, gray, jpeg=False):
         completed = subprocess.run(
             [*NICE, "pdftoppm", "-f", str(number), "-l", str(number), "-singlefile",
              "-scale-to", str(size), *(["-gray"] if gray else []),
-             *(["-jpeg", "-jpegopt", "quality=85"] if jpeg else ["-png"]), str(pdf), str(png.with_suffix(""))],
+             *(["-jpeg", "-jpegopt", "quality=88"] if jpeg else ["-png"]), str(pdf), str(png.with_suffix(""))],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
         )
         if completed.returncode or not png.exists():
@@ -443,9 +447,9 @@ def validate_page_kind(result, texts):
 
 def page_workers():
     try:
-        return max(1, min(64, int(os.environ.get("IPTU_PAGE_WORKERS", "6"))))
+        return max(1, min(128, int(os.environ.get("IPTU_PAGE_WORKERS", "32"))))
     except ValueError:
-        return 6
+        return 32
 
 
 def process_page(pdf, number, evidence, analyze, extension=".pdf"):
@@ -864,3 +868,110 @@ def diagnostics(path):
     report["configuracao"] = {"paginas_em_paralelo": page_workers(), "renderizacao_em_paralelo": RENDER_SLOTS._initial_value,
                               "cpus": available_cpus()}
     return report
+
+
+# ---------- Persistência: arquivos do lote → banco de histórico ----------
+
+RULES_VERSION = hashlib.sha256(Path(parecer.__file__).read_bytes()).hexdigest()[:12]
+
+
+def process_signature(path, process_id):
+    """Muda quando o parecer pode ter mudado: leitura concluída, conferência, consulta SIL ou regras."""
+    folder = path / process_id
+    stamps = [(folder / name).stat().st_mtime_ns if (folder / name).exists() else None
+              for name in ("complete.json", "review.json", "sil.json")]
+    return historico.signature(stamps, RULES_VERSION)
+
+
+def export_document(path, detail):
+    """Documento JSON do processo para outros sistemas (formato versionado)."""
+    state = load(path / "batch.json")
+    report = detail["parecer"]
+    return {
+        "versao_formato": historico.EXPORT_VERSION,
+        "gerado_em": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "versao_regras": RULES_VERSION,
+        "lote": {"id": path.name, "nome": state.get("nome"), "criado_em": state.get("criado")},
+        "processo": {"id": detail["id"], "nome": detail["processo"], "numero_sei": detail.get("numero_processo_sei"),
+                     "arquivos": [{"origem": item["origem"], "erro": item["erro"]} for item in detail["arquivos"]]},
+        "resultado": report["resultado"],
+        "parecer": report,
+        "conferencia_manual": detail.get("revisao"),
+        "cadastro_sil": detail.get("cadastro_sil"),
+    }
+
+
+def summary_of(detail):
+    report = detail["parecer"]
+    if detail["status"] != "em_revisao":
+        return {"resultado": "processando", "sei": detail.get("numero_processo_sei")}
+    resumo = report["resumo"]
+    return {"sei": report["numero_processo_sei"], "resultado": report["resultado"],
+            "requerente": resumo.get("requerente"), "cpf": resumo.get("cpf"),
+            "inscricao": resumo.get("inscricao_imobiliaria"), "modalidade": resumo.get("modalidade"),
+            "renda_familiar_centavos": resumo.get("renda_familiar_centavos"), "sintese": resumo.get("sintese"),
+            "motivos": report["motivos_indeferimento"] or report["pendencias"]
+            or [row["motivo"] for row in report["criterios"] if row["status"] == "fora_do_fluxo"]
+            or report["conferencias_cadastrais"]}
+
+
+def sync_process(path, process_id, motivo="atualizacao"):
+    manifest = load(path / "manifest.json")
+    item = next((entry for entry in manifest if entry["id"] == process_id), None)
+    if item is None:
+        return None
+    detail = process_detail(path, process_id)
+    summary = summary_of(detail)
+    complete = detail["status"] == "em_revisao"
+    historico.upsert(path.name, process_id, load(path / "batch.json").get("nome"), item["processo"], summary,
+                     export_document(path, detail) if complete else None,
+                     process_signature(path, process_id), motivo)
+    return detail
+
+
+def sync_all():
+    """Grava no banco os processos novos ou alterados de todos os lotes."""
+    stored = historico.signatures()
+    for meta in ROOT.glob("*/batch.json"):
+        path = meta.parent
+        manifest_path = path / "manifest.json"
+        if not ID.fullmatch(path.name) or not manifest_path.exists() or reset_pending():
+            continue
+        try:
+            manifest = load(manifest_path)
+        except (OSError, ValueError):
+            continue
+        for item in manifest:
+            try:
+                if stored.get((path.name, item["id"])) != process_signature(path, item["id"]):
+                    sync_process(path, item["id"], "leitura" if (path.name, item["id"]) not in stored else "atualizacao")
+            except (OSError, ValueError, KeyError) as error:
+                print(f"Falha ao gravar histórico {path.name[:8]}/{item['id'][:8]}: {type(error).__name__}", flush=True)
+
+
+def delete_process(path, process_id):
+    """Exclui documentos, leituras e o processo do lote. Recusa enquanto o lote é processado."""
+    with LOCK:
+        check_reset()
+        state = describe(path)
+        if state["status"] in {"na_fila", "processando", "recebendo"}:
+            return 409, {"status": "lote_em_processamento"}
+        manifest = load(path / "manifest.json")
+        item = next((entry for entry in manifest if entry["id"] == process_id), None)
+        if item is None:
+            raise FileNotFoundError
+        others = [entry for entry in manifest if entry["id"] != process_id]
+        shared = {doc["id"] for entry in others for doc in entry["arquivos"] if doc["id"]}
+        for doc in item["arquivos"]:
+            if doc["id"] and doc["id"] not in shared:
+                (path / "files" / doc["id"]).unlink(missing_ok=True)
+                for preview in (path / "previews").glob(doc["id"] + "-*.png") if (path / "previews").is_dir() else []:
+                    preview.unlink()
+        shutil.rmtree(path / process_id, ignore_errors=True)
+        # O ZIP original contém o processo excluído; os arquivos extraídos já bastam.
+        (path / "upload").unlink(missing_ok=True)
+        if others:
+            save(path / "manifest.json", others)
+        else:
+            shutil.rmtree(path, ignore_errors=True)
+        return 200, {"status": "excluido", "processo": item["processo"]}

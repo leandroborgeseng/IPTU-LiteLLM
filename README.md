@@ -28,6 +28,50 @@ titularidade e endereço do imóvel pela inscrição e inscrição mobiliária
 pelo CPF. A API da SIL ainda não consulta imóveis por CPF, por isso a
 unicidade do imóvel continua como conferência cadastral.
 
+### Histórico, busca e exportação
+
+Tudo fica persistido no volume `/data` (faça backup dele):
+
+- `/data/<lote>/files/` — documentos originais extraídos; `/data/<lote>/<processo>/` — leitura de cada página,
+  conferência manual (`review.json`) e consulta à SIL (`sil.json`).
+- `/data/iptu.db` (SQLite) — um registro por processo de todos os lotes com o parecer atual completo, as
+  versões anteriores (cada mudança de parecer, com data e motivo: leitura, reanálise, conferência manual) e a
+  auditoria de exclusões (número do processo, data e usuário, sem dados pessoais).
+
+O painel sincroniza arquivos → banco a cada 5 s. A tabela mostra os processos de todos os lotes, com busca
+textual (processo, requerente, CPF, inscrição, síntese, motivos), ordenação pelos cabeçalhos e filtros
+**Passaram** (enquadra), **Não passaram** (não enquadra ou em análise), Fora do fluxo e Processando. Cada
+linha tem **Reanalisar** e **Excluir** (dupla confirmação: aviso e digitação de EXCLUIR; apaga documentos,
+leituras e versões do processo).
+
+Exportação para outros sistemas (JSON, `versao_formato` 1):
+
+- `GET /api/lotes/<lote>/processos/<processo>/exportar` — um processo, com `historico` das versões.
+- `GET /api/processos/exportar?q=&filtro=&lote=` — todos os processos do filtro (`{"processos": [...]}`).
+- `GET /api/processos/exportar.csv?...` — planilha.
+- `GET /api/lotes/<lote>/processos/<processo>/historico[/<versao>]` — versões do parecer.
+
+Cada documento traz `lote`, `processo` (número SEI e arquivos), `resultado`
+(`enquadra`, `enquadra_conferir_cadastro`, `nao_enquadra`, `em_analise`, `fora_do_fluxo`), `parecer`
+(critérios com páginas de origem, fatos lidos, renda, síntese e texto do parecer), `conferencia_manual`,
+`cadastro_sil`, `versao_regras` e `gerado_em`. Use Basic Auth com o usuário do painel.
+
+### Parâmetros do exercício
+
+`IPTU_EXERCICIO` (2027), `IPTU_SALARIO_MINIMO_CENTAVOS` (162100; o teto é o dobro) e, opcionalmente,
+`IPTU_PRAZO_INICIO`/`IPTU_PRAZO_FIM` (AAAA-MM-DD) para comparar com a data de assinatura do requerimento.
+Atualize-os a cada exercício; a mudança gera nova versão dos pareceres afetados.
+
+### Desempenho (H200)
+
+- Imagens em JPEG: a compressão PNG custava ~1,4 s de CPU por página digitalizada (JPEG: ~0,05 s).
+- `IPTU_PAGE_WORKERS` (padrão 32, máximo 128) define as páginas em leitura simultânea. Suba enquanto o
+  Diagnóstico do lote não mostrar 429/5xx/tempo esgotado e o tempo total cair.
+- Páginas de texto digital irrelevante (andamentos, despachos) não vão ao modelo; a 1ª leitura transcreve só
+  o início da página; leitura detalhada e verificação do requerimento correm em paralelo.
+- A renderização usa os núcleos do container (`IPTU_RENDER_WORKERS` ajusta). Para lotes grandes, rode o
+  worker no servidor da H200 (`compose.gpu-worker.yaml`), que tem mais CPU, e o painel separado.
+
 ### SIL
 
 Configure `SIL_BASE_URL`, `SIL_CLIENT_ID`, `SIL_CLIENT_SECRET` e `SIL_SCOPE`

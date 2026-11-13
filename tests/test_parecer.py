@@ -239,3 +239,22 @@ class PadroesDosProcessosReais(unittest.TestCase):
         process = {"status": "em_revisao", "requerimentos": [], "arquivos": [{"erro": None}],
                    "paginas": [page(1, "outro", texto="documento qualquer")]}
         self.assertEqual(parecer.assess(process, None)["resultado"], "em_analise")
+
+
+class Prazo(unittest.TestCase):
+    def setUp(self):
+        self.saved = (parecer.PRAZO_INICIO, parecer.PRAZO_FIM)
+        parecer.PRAZO_INICIO, parecer.PRAZO_FIM = "2026-03-01", "2026-04-30"
+
+    def tearDown(self):
+        parecer.PRAZO_INICIO, parecer.PRAZO_FIM = self.saved
+
+    def test_assinado_dentro_do_prazo(self):
+        c = criteria(parecer.assess(change(base_process(), data_requerimento="2026-04-01"), None))
+        self.assertEqual(c["prazo"]["status"], "cadastral")
+        self.assertIn("dentro do prazo", c["prazo"]["motivo"])
+
+    def test_assinado_fora_do_prazo(self):
+        report = parecer.assess(change(base_process(), data_requerimento="2026-06-15"), None)
+        self.assertEqual(criteria(report)["prazo"]["status"], "pendente")
+        self.assertEqual(report["resultado"], "em_analise")

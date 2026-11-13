@@ -15,13 +15,15 @@ import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import BoundedSemaphore
+from concurrent.futures import ThreadPoolExecutor
+from threading import BoundedSemaphore, Thread
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 import avaliacao
 import batch
+import historico
 import leitura
 import csv
 import io
@@ -276,6 +278,9 @@ def clean_fields(value, allowed):
     return clean
 
 
+DETAIL_POOL = ThreadPoolExecutor(max_workers=int(os.environ.get("IPTU_PAGE_WORKERS", "32") or 32))
+
+
 def detail_page(model, verify_model, result, hires):
     """Segunda leitura especializada (e dupla leitura do requerimento) sobre a imagem em alta resolução."""
     kind = result.get("tipo")
@@ -300,6 +305,10 @@ def detail_page(model, verify_model, result, hires):
     allowed = ((set(batch.FIELDS) | set(batch.ASSESSMENT_FIELDS)) - batch.INCOME_FIELDS - batch.ID_FIELDS
                if kind == "requerimento" else batch.INCOME_FIELDS if kind in {"beneficio", "holerite"}
                else batch.ID_FIELDS)
+    second_call = None
+    if kind == "requerimento":
+        # Leitura detalhada e verificação são independentes: correm em paralelo.
+        second_call = DETAIL_POOL.submit(ask_json, verify_model, leitura.verification_prompt(), image, 1024)
     status, value = ask_json(model, prompt, image)
     detail = {"status": status}
     if value is not None:
@@ -307,7 +316,7 @@ def detail_page(model, verify_model, result, hires):
         result["obtido"] = {**result.get("obtido", {}), **found}
         detail["campos"] = sorted(found)
     if kind == "requerimento":
-        status2, second = ask_json(verify_model, leitura.verification_prompt(), image, max_tokens=1024)
+        status2, second = second_call.result()
         answers = (second or {}).get("respostas") if isinstance((second or {}).get("respostas"), dict) else None
         detail["segunda_leitura"] = status2
         if answers is not None:
@@ -368,7 +377,7 @@ def extract_form_page(model, png, *, show_preview=False, inventory=False, texts=
         "max_tokens": 2048 if inventory else 512,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image}"}},
+            {"type": "image_url", "image_url": {"url": image_url(png)}},
         ]}],
     }
     started = time.monotonic()
@@ -550,6 +559,8 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                 self.send_page()
             elif self.path.startswith("/api/lotes"):
                 self.handle_batches()
+            elif urlsplit(self.path).path.startswith(("/api/processos", "/api/auditoria")):
+                self.handle_history()
             elif self.path == "/pdf.js":
                 self.send_data(200, "text/javascript; charset=utf-8", PDF_SCRIPT.encode())
             else:
@@ -591,6 +602,59 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
 
     def send_json(self, code, value):
         self.send_data(code, "application/json; charset=utf-8", json.dumps(value).encode())
+
+    def current_user(self):
+        try:
+            scheme, _, credential = self.headers.get("Authorization", "").partition(" ")
+            return base64.b64decode(credential).decode().partition(":")[0] if scheme.lower() == "basic" else None
+        except (ValueError, UnicodeError, binascii.Error):
+            return None
+
+    def handle_history(self):
+        """Lista, busca e exporta o histórico de todos os lotes (banco SQLite)."""
+        url = urlsplit(self.path)
+        query = {key: values[0] for key, values in parse_qs(url.query).items()}
+        params = dict(q=query.get("q", "")[:200], filtro=query.get("filtro", ""), lote_id=query.get("lote", ""),
+                      ordem=query.get("ordem", "atualizado"), direcao=query.get("direcao", "desc"))
+        try:
+            if url.path == "/api/auditoria":
+                self.send_json(200, historico.audit())
+            elif url.path == "/api/processos":
+                rows, totals = historico.search(**params, limite=int(query.get("limite", "500")))
+                self.send_json(200, {"processos": rows, "totais": totals})
+            elif url.path == "/api/processos/exportar":
+                rows, _ = historico.search(**params, limite=100000, completo=True)
+                body = json.dumps({"versao_formato": historico.EXPORT_VERSION, "gerado_em": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                                   "filtros": params, "processos": [row["parecer"] for row in rows if row["parecer"]]},
+                                  ensure_ascii=False).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Disposition", "attachment; filename=pareceres-iptu.json")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif url.path == "/api/processos/exportar.csv":
+                rows, _ = historico.search(**params, limite=100000)
+                output = io.StringIO()
+                writer = csv.writer(output, delimiter=";")
+                writer.writerow(["lote", "processo", "sei", "requerente", "cpf", "inscricao", "modalidade",
+                                 "renda_familiar", "resultado", "sintese", "motivos", "versao", "atualizado_em"])
+                for row in rows:
+                    income = row.get("renda_centavos")
+                    writer.writerow([row.get("lote_nome") or "", row["processo"], row.get("sei") or "",
+                                     row.get("requerente") or "", row.get("cpf") or "", row.get("inscricao") or "",
+                                     row.get("modalidade") or "",
+                                     f"{income / 100:.2f}".replace(".", ",") if income is not None else "",
+                                     row["resultado"], row.get("sintese") or "", " | ".join(row.get("motivos") or []),
+                                     row.get("versao") or "",
+                                     time.strftime("%Y-%m-%d %H:%M", time.localtime(row["atualizado_em"]))
+                                     if row.get("atualizado_em") else ""])
+                self.send_data(200, "text/csv; charset=utf-8", ("\ufeff" + output.getvalue()).encode())
+            else:
+                self.send_json(404, {"status": "nao_encontrado"})
+        except ValueError:
+            self.send_json(400, {"status": "dados_invalidos"})
 
     def handle_batches(self):
         parts = urlsplit(self.path).path.strip("/").split("/")
@@ -688,8 +752,45 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                 ] if manifest.exists() else []
                 self.send_json(200, result)
                 return
+            if len(parts) in {6, 7} and parts[3] == "processos" and parts[5] == "historico" and self.command == "GET":
+                if len(parts) == 6:
+                    self.send_json(200, historico.versions(path.name, parts[4]))
+                else:
+                    version = next((row for row in historico.versions(path.name, parts[4], with_body=True)
+                                    if str(row["versao"]) == parts[6]), None)
+                    if version is None:
+                        raise FileNotFoundError
+                    self.send_json(200, version)
+                return
+            if self.command == "GET" and len(parts) == 6 and parts[3] == "processos" and parts[5] == "exportar":
+                detail = batch.process_detail(path, parts[4])
+                document = batch.export_document(path, detail)
+                document["historico"] = historico.versions(path.name, parts[4])
+                body = json.dumps(document, ensure_ascii=False, indent=2).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                name = (detail.get("numero_processo_sei") or detail["processo"]).replace("/", "-")
+                self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(f"parecer-{name}.json"))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.command == "POST" and len(parts) == 6 and parts[3] == "processos" and parts[5] == "excluir":
+                data = json.loads(self.read_bounded(1024))
+                if not isinstance(data, dict) or data.get("confirmacao") != "EXCLUIR":
+                    raise ValueError
+                detail = batch.process_detail(path, parts[4])
+                code, result = batch.delete_process(path, parts[4])
+                if code == 200:
+                    historico.delete(path.name, parts[4], detail.get("numero_processo_sei") or detail["processo"],
+                                     self.current_user())
+                self.send_json(code, result)
+                return
             if self.command == "POST" and len(parts) == 6 and parts[3] == "processos" and parts[5] == "reanalisar":
                 code, result = batch.request_rerun(path, parts[4])
+                if code == 202:
+                    batch.sync_process(path, parts[4], "reanalise")
                 self.send_json(code, result)
                 return
             if len(parts) in {5, 6} and parts[3] == "processos":
@@ -722,6 +823,7 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                               "confirmacoes": confirmations, "renda_bruta_familiar_centavos": amount,
                               "fonte_renda": source.strip()}
                     batch.save(path / detail["id"] / "review.json", review)
+                    batch.sync_process(path, detail["id"], "conferencia_manual")
                     self.send_json(200, review)
                     return
             if self.command == "GET" and len(parts) == 6 and parts[3] == "pdf" and batch.ID.fullmatch(parts[4]):
@@ -733,7 +835,8 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                     raise FileNotFoundError
                 preview = path / "previews" / f"{parts[4]}-{page}.png"
                 if preview.is_file():
-                    self.send_data(200, "image/png", preview.read_bytes())
+                    data = preview.read_bytes()
+                    self.send_data(200, "image/jpeg" if data[:3] == b"\xff\xd8\xff" else "image/png", data)
                     return
                 if not RUN_WORKER:
                     self.send_json(404, {"status": "visualizacao_aguardando_worker"})
@@ -750,7 +853,7 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                     PDF_SLOTS.release()
                 if png is None:
                     raise FileNotFoundError
-                self.send_data(200, "image/png", png)
+                self.send_data(200, "image/jpeg" if png[:3] == b"\xff\xd8\xff" else "image/png", png)
                 return
             if self.command == "GET" and len(parts) == 5 and parts[3] == "pdf" and batch.ID.fullmatch(parts[4]):
                 source = path / "files" / parts[4]
@@ -919,6 +1022,17 @@ if __name__ == "__main__":
     if len(password) < 16 or password == os.environ.get("LITELLM_API_KEY"):
         sys.exit("Configure uma senha de painel própria com pelo menos 16 caracteres.")
     batch.ROOT.mkdir(parents=True, exist_ok=True)
+    historico.init(batch.ROOT / "iptu.db")
+
+    def keep_history():
+        while True:
+            try:
+                batch.sync_all()
+            except Exception as error:  # o histórico nunca derruba o painel
+                print(f"Falha na sincronização do histórico: {type(error).__name__}: {error}", flush=True)
+            time.sleep(5)
+
+    Thread(target=keep_history, daemon=True).start()
     if RUN_WORKER:
         batch.start_worker(analyze)
     ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()

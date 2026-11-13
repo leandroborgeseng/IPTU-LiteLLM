@@ -47,6 +47,18 @@ progress { width: 100%; height: .5rem; accent-color: var(--brand); }
 .r-nao_enquadra { background: var(--no-bg); color: var(--no); }
 .r-em_analise { background: var(--wait-bg); color: var(--wait); }
 .r-processando, .r-erro, .r-fora_do_fluxo { background: var(--idle-bg); color: var(--idle); }
+#search { flex: 1; min-width: 16rem; padding: .55rem .7rem; }
+.exports { display: flex; gap: 1rem; font-size: .9rem; }
+.counts { margin-bottom: .6rem; }
+.chip { border-radius: 999px; font-size: .82rem; padding: .25rem .75rem; }
+.chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+th[data-sort] { cursor: pointer; user-select: none; }
+th[data-sort]:hover { color: var(--ink); }
+th[data-dir="asc"]::after { content: " ▲"; } th[data-dir="desc"]::after { content: " ▼"; }
+td.actions { white-space: nowrap; }
+td.actions button { font-size: .8rem; padding: .25rem .55rem; margin-right: .3rem; }
+button.danger { color: var(--no); border-color: #f1c4bf; }
+button.danger:hover { background: var(--no-bg); }
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); font-weight: 600; }
 th, td { padding: .6rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -92,7 +104,7 @@ footer button { font-size: .8rem; }
 <header>
   <div><h1>Isenção de IPTU 2027</h1><small>Conferência automática de processos · LC 456/2025</small></div>
   <nav>
-    <label>Lote <select id="batches"><option value="">—</option></select></label>
+    <label>Lote <select id="batches"><option value="">Todos os lotes</option></select></label>
     <a href="/diagnostico">Diagnóstico</a>
   </nav>
 </header>
@@ -116,12 +128,19 @@ footer button { font-size: .8rem; }
 
   <section class="card">
     <div class="toolbar">
-      <div class="counts" id="counts"></div>
-      <div><a id="csv" hidden>Exportar planilha (CSV)</a></div>
+      <input id="search" type="search" placeholder="Buscar por processo, requerente, CPF, inscrição, síntese ou motivo"
+             aria-label="Buscar processos" autocomplete="off">
+      <div class="exports"><a id="json-all" download="pareceres-iptu.json">Exportar JSON</a>
+        <a id="csv" download="pareceres-iptu.csv">Exportar CSV</a></div>
     </div>
+    <div class="counts" id="counts" role="group" aria-label="Filtrar pelo resultado da análise"></div>
     <table>
-      <thead><tr><th>Processo</th><th>Requerente</th><th>Resultado</th><th>Síntese / motivo</th></tr></thead>
-      <tbody id="rows"><tr><td class="empty" colspan="4">Selecione uma pasta para começar.</td></tr></tbody>
+      <thead><tr>
+        <th data-sort="processo">Processo</th><th data-sort="requerente">Requerente</th>
+        <th data-sort="resultado">Resultado</th><th>Síntese / motivo</th>
+        <th data-sort="atualizado">Atualizado</th><th>Ações</th>
+      </tr></thead>
+      <tbody id="rows"><tr><td class="empty" colspan="6">Carregando…</td></tr></tbody>
     </table>
   </section>
 
@@ -130,7 +149,6 @@ footer button { font-size: .8rem; }
     <button id="avaliar" type="button" hidden>Comparar com gabarito</button>
     <button id="diagnostico" type="button" hidden>Diagnóstico do lote</button>
     <input id="gabarito" type="file" accept=".json,application/json" hidden>
-    <button id="limpar" type="button">Apagar todos os lotes</button>
     <span id="footer-status"></span>
   </footer>
 </main>
@@ -145,6 +163,7 @@ footer button { font-size: .8rem; }
       <div><h1 id="d-title">Processo</h1><small id="d-sub"></small></div>
       <nav><span id="d-badge" class="badge"></span>
         <button id="rerun-process" type="button" title="Lê de novo todas as páginas deste processo">Reanalisar processo</button>
+        <button id="delete-process" type="button" class="danger">Excluir</button>
         <button id="close" type="button">Fechar</button></nav>
     </header>
     <div class="body">
@@ -155,7 +174,7 @@ footer button { font-size: .8rem; }
         </section>
         <section class="card">
           <div class="toolbar" style="margin:0 0 .5rem"><h3 style="margin:0">Parecer</h3>
-            <div><button id="copy" type="button">Copiar</button> <a id="json" download="parecer-iptu.json">JSON</a></div></div>
+            <div><button id="copy" type="button">Copiar</button> <a id="json">Exportar JSON</a></div></div>
           <pre id="opinion"></pre>
         </section>
         <section class="card">

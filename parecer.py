@@ -10,11 +10,16 @@ Cada critério recebe um status:
 - aviso: informação administrativa que não afeta o enquadramento.
 """
 
+import os
 import re
 import unicodedata
 
-EXERCICIO = 2027
-TETO_CENTAVOS = 324200
+# Parâmetros do exercício (variáveis de ambiente; padrão: exercício 2027, salário mínimo de R$ 1.621,00).
+EXERCICIO = int(os.environ.get("IPTU_EXERCICIO", "2027"))
+SALARIO_MINIMO_CENTAVOS = int(os.environ.get("IPTU_SALARIO_MINIMO_CENTAVOS", "162100"))
+TETO_CENTAVOS = 2 * SALARIO_MINIMO_CENTAVOS  # LC 456/2025: até 2 salários mínimos
+PRAZO_INICIO = os.environ.get("IPTU_PRAZO_INICIO", "")  # AAAA-MM-DD (opcional)
+PRAZO_FIM = os.environ.get("IPTU_PRAZO_FIM", "")
 FONTE_TETO = "https://www3.franca.sp.gov.br/noticia/39898/prazo-para-solicitar-reduo-de-10-no-iptu-termina-nesta-quarta-feira.html"
 FONTE_CRITERIOS = "https://www3.franca.sp.gov.br/cartadeservicos/servicos/iseno-de-iptu-para-aposentados-pensionistas-e-beneficirios-do-bpcloas"
 CONFIRMACOES = {
@@ -210,7 +215,7 @@ def assess(process, review, cadastro=None):
                   else "Número do SEI não encontrado nos nomes das pastas e arquivos.")
         add("processo_sei", "aviso", reason, process.get("fontes_numero_sei"))
     if exercise != EXERCICIO:
-        add("exercicio", "pendente", "Confirme se o exercício solicitado é 2027.", facts.get("exercicio"))
+        add("exercicio", "pendente", f"Confirme se o exercício solicitado é {EXERCICIO}.", facts.get("exercicio"))
     if modalities & SOCIAIS:
         add("modalidade", "pendente", "Modalidade PCD ou doença grave: encaminhar à assistência social.",
             facts.get("modalidade_criterio"))
@@ -496,8 +501,15 @@ def assess(process, review, cadastro=None):
         add("mobiliario", "cadastral", "Conferir no Cadastro Mobiliário (SIL) se o requerente ou o cônjuge "
             "tem inscrição municipal ativa (sócio ou autônomo).")
     if not confirmation("prazo"):
-        add("prazo", "cadastral", "Conferir no SEI/F4 a data oficial do protocolo e o prazo.",
-            facts.get("data_requerimento"))
+        signed = unique("data_requerimento")
+        signed = signed if isinstance(signed, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", signed) else None
+        if signed and PRAZO_INICIO and PRAZO_FIM and not PRAZO_INICIO <= signed <= PRAZO_FIM:
+            add("prazo", "pendente", f"Requerimento assinado em {signed}, fora do prazo de {PRAZO_INICIO} a "
+                f"{PRAZO_FIM}. Confira a data oficial do protocolo no SEI/F4.", facts.get("data_requerimento"))
+        else:
+            add("prazo", "cadastral", "Conferir no SEI/F4 a data oficial do protocolo e o prazo"
+                + (f" (requerimento assinado em {signed}" + (", dentro do prazo" if PRAZO_INICIO and PRAZO_FIM else "")
+                   + ")" if signed else "") + ".", facts.get("data_requerimento"))
 
     if any(row["status"] != "extraido" or row.get("status_ocr") == "falha_ocr" for row in pages) or any(
         doc["erro"] and doc["erro"] != "formato_nao_processado" for doc in process["arquivos"]

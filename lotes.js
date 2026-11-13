@@ -18,6 +18,7 @@ const LABEL = {
 };
 let currentBatch = '';
 let currentProcess = '';
+let detailBatch = '';
 let uploading = false;
 
 async function request(path, options) {
@@ -336,65 +337,145 @@ drop.ondrop = async (event) => {
   start(items, label);
 };
 
-/* ---------- Lotes e resultados ---------- */
+/* ---------- Lotes (progresso) e histórico de processos (todos os lotes) ---------- */
+const view = {q: '', filtro: '', ordem: 'atualizado', direcao: 'desc'};
+const FILTROS = [['', 'Todos'], ['passaram', 'Passaram'], ['nao_passaram', 'Não passaram'],
+  ['fora_do_fluxo', 'Fora do fluxo'], ['processando', 'Processando']];
+const GRUPOS = {passaram: ['enquadra', 'enquadra_conferir_cadastro'], nao_passaram: ['nao_enquadra', 'em_analise'],
+  fora_do_fluxo: ['fora_do_fluxo'], processando: ['processando']};
+
+function query(extra = {}) {
+  const params = new URLSearchParams({q: view.q, filtro: view.filtro, ordem: view.ordem, direcao: view.direcao, ...extra});
+  if (currentBatch) params.set('lote', currentBatch);
+  return params.toString();
+}
+
 async function refreshBatches() {
   const lots = await request(api);
   const select = $('batches');
-  const chosen = select.value;
-  select.replaceChildren(el('option', {value: ''}, '—'),
+  select.replaceChildren(el('option', {value: ''}, 'Todos os lotes'),
     ...lots.map((lot) => el('option', {value: lot.id}, lot.nome + ' · ' +
       new Date((lot.criado || 0) * 1000).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}))));
-  select.value = lots.some((lot) => lot.id === chosen) ? chosen : '';
-  if (!currentBatch && lots[0]) selectBatch(lots[0].id);
+  select.value = lots.some((lot) => lot.id === currentBatch) ? currentBatch : '';
+  currentBatch = select.value;
 }
 
 function selectBatch(id) {
   currentBatch = id;
   $('batches').value = id;
-  $('csv').href = api + '/' + id + '/resumo.csv';
-  $('csv').download = 'pareceres-iptu.csv';
   refreshBatch();
+  refreshTable();
 }
 
 async function refreshBatch() {
-  if (!currentBatch) return;
+  const lotActions = ['reanalisar', 'avaliar', 'diagnostico'];
+  if (!currentBatch) {
+    for (const id of lotActions) $(id).hidden = true;
+    return;
+  }
   const id = currentBatch;
-  const [lot, rows] = await Promise.all([request(api + '/' + id), request(api + '/' + id + '/resumo')]);
+  const lot = await request(api + '/' + id);
   if (id !== currentBatch) return;
-  const done = rows.filter((row) => row.concluido).length;
   const progress = lot.progresso;
   if (['na_fila', 'processando'].includes(lot.status)) {
     const fraction = progress?.total_paginas ? progress.paginas_concluidas / progress.total_paginas : 0;
+    const done = lot.processos.filter((row) => row.concluido).length;
     step('ler', (progress ? progress.paginas_concluidas + ' de ' + progress.total_paginas + ' páginas · ' : 'Na fila · ')
-      + done + ' de ' + rows.length + ' processo(s) com parecer', fraction);
+      + done + ' de ' + lot.processos.length + ' processo(s) com parecer', fraction);
   } else if (lot.status === 'falha') {
     step('ler', 'Falha no processamento: ' + (lot.motivo || 'erro') + '.');
   } else if (lot.status === 'concluido' && $('job').classList.contains('on')) {
-    step('pronto', rows.length + ' processo(s) analisado(s).', 1);
+    step('pronto', lot.processos.length + ' processo(s) analisado(s).', 1);
   }
   $('reanalisar').hidden = lot.status === 'recebendo';
   $('avaliar').hidden = lot.status !== 'concluido';
   $('diagnostico').hidden = lot.status === 'recebendo';
-  $('csv').hidden = !rows.length;
-  const tally = {};
-  for (const row of rows) tally[row.resultado] = (tally[row.resultado] || 0) + 1;
-  $('counts').replaceChildren(...Object.entries(tally).map(([key, count]) =>
-    el('span', {class: 'badge r-' + key}, count + ' · ' + (RESULT[key] || key))));
-  const body = $('rows');
-  if (!rows.length) {
-    body.replaceChildren(el('tr', {}, el('td', {class: 'empty', colspan: '4'}, 'Separando os processos…')));
-    return;
-  }
-  body.replaceChildren(...rows.map((row) => el('tr', {onclick: () => openProcess(row.id)},
-    el('td', {}, row.sei || row.processo),
-    el('td', {}, row.requerente || '—', row.cpf ? el('div', {class: 'why'}, row.cpf) : null),
-    el('td', {}, el('span', {class: 'badge r-' + row.resultado}, RESULT[row.resultado] || row.resultado),
-      row.renda_familiar_centavos != null ? el('div', {class: 'why'}, 'Renda ' + money(row.renda_familiar_centavos)) : null),
-    el('td', {class: 'why'}, row.sintese ? el('div', {}, row.sintese) : null,
-      ['enquadra', 'enquadra_conferir_cadastro'].includes(row.resultado) ? null : (row.motivos || [])[0] || ''))));
 }
 
-$('batches').onchange = () => { $('job').classList.remove('on'); if ($('batches').value) selectBatch($('batches').value); };
+function formatDate(seconds) {
+  return seconds ? new Date(seconds * 1000).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}) : '';
+}
+
+async function refreshTable() {
+  const data = await request('/api/processos?' + query());
+  const totals = data.totais || {};
+  const count = (key) => key ? GRUPOS[key].reduce((sum, r) => sum + (totals[r] || 0), 0)
+    : Object.values(totals).reduce((a, b) => a + b, 0);
+  $('counts').replaceChildren(...FILTROS.map(([key, label]) => el('button', {
+    type: 'button', class: 'chip' + (view.filtro === key ? ' on' : ''),
+    onclick: () => { view.filtro = key; refreshTable(); }}, label + ' · ' + count(key))));
+  $('csv').href = '/api/processos/exportar.csv?' + query();
+  $('json-all').href = '/api/processos/exportar?' + query();
+  for (const th of document.querySelectorAll('th[data-sort]')) {
+    th.dataset.dir = th.dataset.sort === view.ordem ? view.direcao : '';
+  }
+  const body = $('rows');
+  if (!data.processos.length) {
+    body.replaceChildren(el('tr', {}, el('td', {class: 'empty', colspan: '6'},
+      view.q || view.filtro ? 'Nenhum processo encontrado com esses filtros.' : 'Selecione uma pasta para começar.')));
+    return;
+  }
+  body.replaceChildren(...data.processos.map((row) => el('tr', {onclick: () => openProcess(row.lote_id, row.processo_id)},
+    el('td', {}, row.sei || row.processo, el('div', {class: 'why'}, row.lote_nome || '')),
+    el('td', {}, row.requerente || '—', row.cpf ? el('div', {class: 'why'}, row.cpf) : null),
+    el('td', {}, el('span', {class: 'badge r-' + row.resultado}, RESULT[row.resultado] || row.resultado),
+      row.renda_centavos != null ? el('div', {class: 'why'}, 'Renda ' + money(row.renda_centavos)) : null),
+    el('td', {class: 'why'}, row.sintese ? el('div', {}, row.sintese) : null,
+      ['enquadra', 'enquadra_conferir_cadastro'].includes(row.resultado) ? null : (row.motivos || [])[0] || ''),
+    el('td', {class: 'why'}, formatDate(row.atualizado_em), row.versao > 1 ? el('div', {}, 'versão ' + row.versao) : null),
+    el('td', {class: 'actions'},
+      el('button', {type: 'button', title: 'Ler de novo todas as páginas deste processo',
+        onclick: (event) => { event.stopPropagation(); rerunProcess(row.lote_id, row.processo_id); }}, 'Reanalisar'),
+      el('button', {type: 'button', class: 'danger',
+        onclick: (event) => { event.stopPropagation(); deleteProcess(row); }}, 'Excluir')))));
+}
+
+async function rerunProcess(lote, processo) {
+  if (!confirm('Ler de novo todas as páginas deste processo? A conferência manual registrada é mantida.')) return false;
+  try {
+    const lot = await request(api + '/' + lote + '/processos/' + processo + '/reanalisar', {method: 'POST'});
+    if (lote !== currentBatch) selectBatch(lote);
+    step('ler', lot.status === 'processando' ? 'Reanálise agendada: começa quando a leitura atual terminar.'
+      : 'Reanalisando o processo…', 0);
+    refreshTable();
+    return lot;
+  } catch (error) { alert('Não foi possível reanalisar: ' + error.message); return false; }
+}
+
+async function deleteProcess(row) {
+  const name = (row.sei || row.processo) + (row.requerente ? ' — ' + row.requerente : '');
+  if (!confirm('Excluir o processo ' + name + '?\n\nOs documentos originais, as leituras e o histórico de pareceres '
+    + 'deste processo serão apagados. Esta ação não pode ser desfeita.')) return;
+  const typed = prompt('Para confirmar a exclusão de ' + name + ', digite EXCLUIR:');
+  if (typed === null) return;
+  if (typed.trim() !== 'EXCLUIR') { alert('Exclusão cancelada: o texto digitado não confere.'); return; }
+  try {
+    await request(api + '/' + row.lote_id + '/processos/' + row.processo_id + '/excluir',
+      {method: 'POST', body: JSON.stringify({confirmacao: 'EXCLUIR'})});
+    if ($('detail').classList.contains('on')) $('close').click();
+    await refreshBatches();
+    refreshTable();
+  } catch (error) {
+    alert(error.message === 'lote_em_processamento'
+      ? 'O lote deste processo ainda está em leitura. Tente de novo quando terminar.'
+      : 'Não foi possível excluir: ' + error.message);
+  }
+}
+
+let searchTimer;
+$('search').oninput = () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { view.q = $('search').value; refreshTable(); }, 300);
+};
+for (const th of document.querySelectorAll('th[data-sort]')) {
+  th.onclick = () => {
+    view.direcao = view.ordem === th.dataset.sort && view.direcao === 'desc' ? 'asc'
+      : view.ordem === th.dataset.sort ? 'desc' : (th.dataset.sort === 'atualizado' ? 'desc' : 'asc');
+    view.ordem = th.dataset.sort;
+    refreshTable();
+  };
+}
+$('batches').onchange = () => { $('job').classList.remove('on'); selectBatch($('batches').value); };
 $('reanalisar').onclick = async () => {
   if (!confirm('Reler as páginas com falha ou lidas por versão anterior em todos os processos deste lote?')) return;
   try {
@@ -405,31 +486,19 @@ $('reanalisar').onclick = async () => {
   } catch (error) { alert('Não foi possível reanalisar: ' + error.message); }
 };
 $('rerun-process').onclick = async () => {
-  if (!confirm('Ler de novo todas as páginas deste processo? A conferência manual registrada é mantida.')) return;
-  try {
-    const lot = await request(api + '/' + currentBatch + '/processos/' + currentProcess + '/reanalisar', {method: 'POST'});
+  const lot = await rerunProcess(detailBatch, currentProcess);
+  if (lot) {
     $('d-badge').className = 'badge r-processando';
     $('d-badge').textContent = lot.status === 'processando' ? 'Reanálise agendada' : 'Reanalisando';
-    step('ler', lot.status === 'processando' ? 'Reanálise do processo agendada: começa quando a leitura atual terminar.'
-      : 'Reanalisando o processo…', 0);
-    refreshBatch();
-  } catch (error) { alert('Não foi possível reanalisar: ' + error.message); }
+  }
 };
-$('limpar').onclick = async () => {
-  if (!confirm('Apagar todos os lotes, documentos e conferências salvas?')) return;
-  await request(api + '/limpeza', {method: 'POST'});
-  currentBatch = '';
-  $('rows').replaceChildren(el('tr', {}, el('td', {class: 'empty', colspan: '4'}, 'Lotes apagados.')));
-  $('counts').replaceChildren();
-  $('job').classList.remove('on');
-  localStorage.removeItem(RESUME_KEY);
-  setTimeout(refreshBatches, 4000);
-};
+$('delete-process').onclick = () => deleteProcess({lote_id: detailBatch, processo_id: currentProcess,
+  sei: $('d-sub').dataset.sei, requerente: $('d-title').textContent});
 
 /* ---------- Detalhe do processo ---------- */
 function show(fileId, page = 1) {
   if (!fileId) return;
-  const base = api + '/' + currentBatch + '/pdf/' + fileId;
+  const base = api + '/' + detailBatch + '/pdf/' + fileId;
   $('files').value = fileId;
   $('viewer').src = base + '/' + page;
   $('page-label').textContent = 'página ' + page;
@@ -450,9 +519,10 @@ function pageButtons(sources) {
     el('button', {type: 'button', onclick: () => show(source.arquivo, source.pagina)}, 'p. ' + source.pagina)));
 }
 
-async function openProcess(id) {
+async function openProcess(lote, id) {
+  detailBatch = lote;
   currentProcess = id;
-  const path = api + '/' + currentBatch + '/processos/' + id;
+  const path = api + '/' + lote + '/processos/' + id;
   const detail = await request(path);
   const report = detail.parecer;
   $('detail').classList.add('on');
@@ -468,7 +538,8 @@ async function openProcess(id) {
     el('div', {}, el('strong', {}, LABEL[row.criterio] || row.criterio),
       el('span', {class: 'm'}, row.motivo), pageButtons(row.evidencias)))));
   $('opinion').textContent = report.parecer_texto;
-  $('json').href = path + '/parecer';
+  $('json').href = path + '/exportar';
+  $('d-sub').dataset.sei = detail.numero_processo_sei || detail.processo;
   const files = detail.arquivos.filter((doc) => doc.id);
   $('files').replaceChildren(...files.map((doc) => el('option', {value: doc.id}, doc.origem)));
   $('page-list').replaceChildren(...detail.paginas.map((row) => el('li', {},
@@ -508,18 +579,22 @@ $('notes').onsubmit = async (event) => {
     if (renda.trim() && !parts) throw new Error('Informe a renda em reais, por exemplo 3242,00.');
     const cents = parts ? Number(parts[1]) * 100 + Number((parts[2] || '').padEnd(2, '0')) : null;
     const confirmacoes = Object.fromEntries(Object.entries(fields).filter(([, value]) => value.trim()));
-    await request(api + '/' + currentBatch + '/processos/' + currentProcess + '/revisao', {
+    await request(api + '/' + detailBatch + '/processos/' + currentProcess + '/revisao', {
       method: 'POST', body: JSON.stringify({nota, confirmacoes, fonte_renda, renda_bruta_familiar_centavos: cents}),
     });
-    await openProcess(currentProcess);
-    refreshBatch();
+    await openProcess(detailBatch, currentProcess);
+    refreshTable();
   } catch (error) {
     $('note-status').textContent = error.message;
   }
 };
 
-refreshBatches().catch((error) => { $('footer-status').textContent = 'Falha: ' + error.message; });
-setInterval(() => { if (!uploading) refreshBatch().catch(() => {}); }, 4000);
+refreshBatches().then(refreshTable).catch((error) => { $('footer-status').textContent = 'Falha: ' + error.message; });
+setInterval(() => {
+  if (uploading) return;
+  refreshBatch().catch(() => {});
+  if (document.activeElement !== $('search')) refreshTable().catch(() => {});
+}, 5000);
 
 /* ---------- Comparação com gabarito ---------- */
 $('avaliar').onclick = () => $('gabarito').click();

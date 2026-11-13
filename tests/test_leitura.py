@@ -66,9 +66,11 @@ class DetailPage(unittest.TestCase):
         app.ask_json = self.original
 
     def fake(self, replies):
+        """replies: lista na ordem m1, m2…; cada modelo recebe a sua resposta (as chamadas podem ser paralelas)."""
+        by_model = {f"m{index + 1}": reply for index, reply in enumerate(replies)}
         def ask(model, prompt, png, max_tokens=2048, timeout=60):
             self.calls.append(model)
-            return replies[len(self.calls) - 1]
+            return by_model[model]
         app.ask_json = ask
 
     def test_requerimento_lido_duas_vezes(self):
@@ -77,7 +79,7 @@ class DetailPage(unittest.TestCase):
                    ("extraido", {"respostas": {"reside_no_imovel": "Não", "estado_civil": "Viúvo"}})])
         result = app.detail_page("m1", "m2", {"status": "extraido", "tipo": "requerimento", "obtido": {}},
                                  hires=lambda: b"png")
-        self.assertEqual(self.calls, ["m1", "m2"])
+        self.assertEqual(sorted(self.calls), ["m1", "m2"])
         self.assertEqual(result["obtido"]["cpf_requerente"], "091.113.608-87")
         self.assertEqual(result["obtido"]["beneficio_aposentadoria_centavos"], 162100)
         self.assertNotIn("inventado", result["obtido"])

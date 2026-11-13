@@ -5,7 +5,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN python -m pip install --no-cache-dir Pillow==13.0.0
 WORKDIR /app
-COPY app.py avaliacao.py batch.py leitura.py parecer.py sil.py lotes.html lotes.js ./
+COPY app.py avaliacao.py batch.py historico.py leitura.py parecer.py sil.py lotes.html lotes.js ./
 RUN install -d -m 0700 -o 10001 -g 10001 /data
 COPY fixtures/ ./fixtures/
 USER 10001:10001

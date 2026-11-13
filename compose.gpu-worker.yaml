@@ -10,7 +10,7 @@ services:
       IPTU_LLM_TIMEOUT: ${IPTU_LLM_TIMEOUT:-180}
       IPTU_DETAIL_MODEL: ${IPTU_DETAIL_MODEL:-}
       IPTU_VERIFY_MODEL: ${IPTU_VERIFY_MODEL:-}
-      IPTU_PAGE_WORKERS: ${IPTU_PAGE_WORKERS:-6}
+      IPTU_PAGE_WORKERS: ${IPTU_PAGE_WORKERS:-32}
     volumes:
       - type: bind
         source: ${IPTU_SHARED_DATA_DIR:?Informe o caminho do volume compartilhado}
