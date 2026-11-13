@@ -173,3 +173,69 @@ class Parecer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PadroesDosProcessosReais(unittest.TestCase):
+    """Padrões observados em processos reais de Franca (dados fictícios)."""
+
+    def test_extrato_com_nome_abreviado_e_numero_declarado(self):
+        process = base_process()
+        process["paginas"][3]["obtido"]["titular_renda"] = "MARIA D SOUZA"
+        process["paginas"][4]["obtido"]["titular_renda"] = "M D ARC SOUZA"  # só o número liga
+        report = parecer.assess(process, None)
+        self.assertEqual(criteria(report)["beneficio"]["status"], "atendido")
+        self.assertEqual(report["resumo"]["renda_familiar_centavos"], 324200)
+
+    def test_nomes_equivalentes(self):
+        self.assertTrue(parecer.same_person("NEUSA C M SICCHIEROLLI", "NEUSA CAROLINA MARQUES SICCHIEROLLI"))
+        self.assertTrue(parecer.same_person("JOANA DARC PINTO BARBOSA", "Joana D'Arc Pinto Barbosa"))
+        self.assertTrue(parecer.same_person("JOSÉ LUIS DO NASCIMENTO", "JOSE LUIS NASCIMENTO"))
+        self.assertFalse(parecer.same_person("JOSE LUIS DO NASCIMENTO", "MARIA DE LOURDES DO NASCIMENTO"))
+        self.assertFalse(parecer.same_person("ANA SOUZA", "ANA SILVA"))
+
+    def test_casada_com_extrato_do_conjuge(self):
+        process = change(base_process(), estado_civil="Casado", nome_conjuge="JOSÉ LUIS DO NASCIMENTO",
+                         conjuge_beneficio_numero="01736939308", modalidade_criterio="aposentadoria",
+                         beneficio_pensao_numero=None)
+        process["paginas"][3]["obtido"].update(titular_renda="JOSE LUIS DO NASCIMENTO",
+                                               numero_beneficio="017.369.393-08")
+        report = parecer.assess(process, None)
+        self.assertEqual(criteria(report)["renda"]["status"], "atendido", criteria(report)["renda"]["motivo"])
+        self.assertEqual(report["resumo"]["renda_familiar_centavos"], 324200)
+
+    def test_outras_rendas_em_branco_com_demais_respostas_negativas(self):
+        process = change(base_process(), outras_rendas=None)
+        self.assertEqual(criteria(parecer.assess(process, None))["renda"]["status"], "atendido")
+
+    def test_edicula_com_irmao_declarado_como_descendente(self):
+        process = change(base_process(), nome_ocupante_edicula="CARLOS SOUZA",
+                         cpf_ocupante_edicula="222.333.444-55")
+        process["paginas"][2]["obtido"]["filiacao_documento"] = "PEDRO SOUZA / ANA SOUZA"
+        process["paginas"].append(page(4, "identidade", {"nome_documento": "CARLOS SOUZA",
+                                                          "cpf_documento": "222.333.444-55",
+                                                          "filiacao_documento": "PEDRO SOUZA / ANA SOUZA"}))
+        report = parecer.assess(process, None)
+        self.assertEqual(criteria(report)["edícula"]["status"], "pendente")
+        self.assertIn("irmão", criteria(report)["edícula"]["motivo"])
+
+    def test_edicula_com_filho_comprovado_pela_filiacao(self):
+        process = change(base_process(), nome_ocupante_edicula="JOSE SOUZA")
+        process["paginas"].append(page(4, "identidade", {"nome_documento": "JOSE SOUZA",
+                                                          "filiacao_documento": "JOAO SOUZA / MARIA D'ARC SOUZA"}))
+        c = criteria(parecer.assess(process, None))
+        self.assertEqual(c["edícula"]["status"], "atendido")
+        self.assertIn("confirma o parentesco", c["edícula"]["motivo"])
+
+    def test_processo_de_imunidade_fica_fora_do_fluxo(self):
+        process = {"status": "em_revisao", "requerimentos": [], "arquivos": [{"erro": None}],
+                   "numero_processo_sei": "3516200.410.00006891-2026-82",
+                   "paginas": [page(1, "capa", texto="", texto_pdf="PROCESSO: 2024003642 NOME: DIOCESE "
+                                    "ASSUNTO: IMUNIDADE\nANDAMENTO")]}
+        report = parecer.assess(process, None)
+        self.assertEqual(report["resultado"], "fora_do_fluxo")
+        self.assertIn("IMUNIDADE", report["parecer_texto"])
+
+    def test_processo_sem_requerimento_e_sem_assunto_conhecido(self):
+        process = {"status": "em_revisao", "requerimentos": [], "arquivos": [{"erro": None}],
+                   "paginas": [page(1, "outro", texto="documento qualquer")]}
+        self.assertEqual(parecer.assess(process, None)["resultado"], "em_analise")

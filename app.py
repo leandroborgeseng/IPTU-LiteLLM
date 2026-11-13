@@ -165,8 +165,13 @@ def extract_form_page(model, png, *, show_preview=False, inventory=False, texts=
               "beneficio_bpc_centavos (números só com dígitos, valores em centavos inteiros). "
               "A continuação do formulário de requerimento em outra página (dados do cônjuge, "
               "atividades, assinatura) também é requerimento. Em documento de identidade, CNH ou "
-              "CPF, extraia nome_documento e cpf_documento. Em demonstrativo de benefício ou holerite, "
-              "extraia renda_bruta_centavos (inteiro, nunca valor líquido), competencia_renda "
+              "CPF, extraia nome_documento, cpf_documento e filiacao_documento (nomes do pai e da mãe "
+              "separados por \" / \"). No requerimento, extraia também nome_ocupante_edicula, "
+              "cpf_ocupante_edicula e conjuge_beneficio_numero. A \"Declaração de Isenção de IPTU\" "
+              "da Prefeitura é o mesmo formulário de requerimento. Em demonstrativo de benefício ou holerite, "
+              "extraia renda_bruta_centavos (inteiro em centavos da renda mensal bruta: rubrica 101 "
+              "\"valor total renda mensal\" ou salário bruto; nunca o valor líquido; exclua 13º salário, "
+              "abono anual, atrasados e complementos que somem outro mês), competencia_renda "
               "(AAAA-MM), titular_renda, numero_beneficio (apenas dígitos) e especie_beneficio "
               "(texto da espécie, como pensão por morte). Omita campos adicionais que não estiverem explícitos. "
               "Use posse para escritura, matrícula, contrato, testamento, formal de partilha ou "
@@ -245,10 +250,16 @@ def extract_form_page(model, png, *, show_preview=False, inventory=False, texts=
         if result["tipo"] != "requerimento":
             allowed = (batch.INCOME_FIELDS if result["tipo"] in {"beneficio", "holerite"}
                        else batch.ID_FIELDS if result["tipo"] in {"identidade", "cpf"} else set())
+            # Guarda os campos de formulário: a página pode ser continuação do requerimento.
+            result["obtido_bruto"] = {key: field for key, field in value.items()
+                                      if field is not None and key not in batch.INCOME_FIELDS | batch.ID_FIELDS}
             value = {key: field for key, field in value.items() if key in allowed}
-        for key in ("cpf_requerente", "cpf_conjuge", "cpf_documento"):
-            if value.get(key) and not re.fullmatch(r"(?:[0-9]{11}|[0-9]{3}\.[0-9]{3}\.[0-9]{3}-[0-9]{2})", value[key]):
-                value[key] = None
+        for key in ("cpf_requerente", "cpf_conjuge", "cpf_documento", "cpf_ocupante_edicula"):
+            if value.get(key):
+                # Aceita qualquer escrita com 11 dígitos (ex.: CPF manuscrito "091113608/87").
+                number = re.sub(r"\D", "", value[key])
+                value[key] = (f"{number[:3]}.{number[3:6]}.{number[6:9]}-{number[9:]}"
+                              if len(number) == 11 else None)
         if re.fullmatch(r"[0-9]{7}-[0-9]{2}\.[0-9]{4}\.[0-9]\.[0-9]{2}\.[0-9]{4}",
                         value.get("inscricao_imobiliaria") or ""):
             value["inscricao_imobiliaria"] = None

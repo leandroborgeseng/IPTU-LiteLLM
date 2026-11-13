@@ -70,6 +70,32 @@ def person_key(name):
     return "".join(character for character in fold(name) if character.isalpha())
 
 
+PARTICULAS = {"de", "da", "do", "das", "dos", "e", "d"}
+
+
+def name_tokens(name):
+    words = re.findall(r"[a-z]+", fold(name).replace("'", ""))
+    return [word for word in words if word not in PARTICULAS]
+
+
+def same_person(a, b):
+    """Compara nomes tolerando abreviações (NEUSA C M SICCHIEROLLI) e partículas (D'ARC/DARC)."""
+    if not a or not b:
+        return False
+    if person_key(a) == person_key(b):
+        return True
+    x, y = name_tokens(a), name_tokens(b)
+    if len(x) < 2 or len(y) < 2 or x[0] != y[0] or x[-1] != y[-1]:
+        return False
+    short, long_ = (x, y) if len(x) <= len(y) else (y, x)
+    rest = iter(long_[1:-1])
+    for word in short[1:-1]:
+        if not any(other == word or (len(word) == 1 and other.startswith(word))
+                   or (len(other) == 1 and word.startswith(other)) for other in rest):
+            return False
+    return True
+
+
 def digits(value):
     return re.sub(r"\D", "", str(value or ""))
 
@@ -207,17 +233,31 @@ def assess(process, review, cadastro=None):
                 [evidence(row, row.get("tipo")) for row in ids])
 
     # Benefício: os benefícios declarados têm extrato em nome do requerente.
-    def holder_ok(item, keys):
-        holder = person_key(item["valor"].get("titular_renda"))
-        return not holder or not keys or holder in keys
-
-    applicant_income = [item for item in income if holder_ok(item, {applicant_key} - {""})]
+    # O número do benefício declarado liga o extrato à pessoa mesmo com nome abreviado.
+    declared = {kind: digits(unique(f"beneficio_{kind}_numero")) for kind in BENEFICIOS_DECLARADOS}
+    declared = {kind: number for kind, number in declared.items() if number}
+    spouse_number = digits(unique("conjuge_beneficio_numero"))
+    owner = {}
+    for item in income:
+        number = digits(item["valor"].get("numero_beneficio"))
+        holder = item["valor"].get("titular_renda")
+        if number and number in declared.values():
+            owner[id(item)] = "requerente"
+        elif number and number == spouse_number:
+            owner[id(item)] = "conjuge"
+        elif holder and same_person(holder, applicant):
+            owner[id(item)] = "requerente"
+        elif holder and same_person(holder, spouse):
+            owner[id(item)] = "conjuge"
+        elif not holder:
+            owner[id(item)] = "requerente"
+        else:
+            owner[id(item)] = "terceiro"
+    applicant_income = [item for item in income if owner[id(item)] == "requerente"]
     if applicant_income:
         latest = max(item["valor"].get("competencia_renda") or "" for item in applicant_income)
         applicant_income = [item for item in applicant_income
                             if (item["valor"].get("competencia_renda") or "") == latest]
-    declared = {kind: digits(unique(f"beneficio_{kind}_numero")) for kind in BENEFICIOS_DECLARADOS}
-    declared = {kind: number for kind, number in declared.items() if number}
     found_numbers = {digits(item["valor"].get("numero_beneficio")) for item in applicant_income}
     missing = {kind: number for kind, number in declared.items() if number not in found_numbers}
     benefit_ok = False
@@ -239,7 +279,7 @@ def assess(process, review, cadastro=None):
         benefit_ok = True
 
     # Renda: requerente + cônjuge, competência mais recente, sem duplicar benefícios.
-    estimate = income_estimate(income, {applicant_key, spouse_key} - {""})
+    estimate = income_estimate([item for item in income if owner[id(item)] != "terceiro"])
     marital = "_".join(fold(unique("estado_civil")).split())
     has_spouse = bool(spouse_key) or marital.startswith(("casad", "uniao", "companheir"))
     no_spouse = not spouse_key and (marital in SEM_CONJUGE or flag("conjuge_informado") is False)
@@ -248,7 +288,7 @@ def assess(process, review, cadastro=None):
         gaps.append("estado civil ou cônjuge não identificado no requerimento")
     if has_spouse:
         spouse_income = [item for item in (estimate or {}).get("comprovantes", [])
-                         if person_key(item["valor"].get("titular_renda")) == spouse_key]
+                         if owner[id(item)] == "conjuge"]
         declared_spouse = unique("conjuge_renda_centavos")
         if not spouse_income and type(declared_spouse) is int:
             extra += declared_spouse
@@ -266,7 +306,9 @@ def assess(process, review, cadastro=None):
             extra_sources += facts.get(value_field, [])
         elif answer is True:
             gaps.append(label + " declarada sem valor")
-        elif answer is None and field == "outras_rendas":
+        elif answer is None and field == "outras_rendas" and not (
+            flag("atividade_economica_declarada") is False and flag("trabalha_registrado") is False
+        ):
             gaps.append("resposta sobre outras rendas não identificada")
     if flag("trabalha_registrado") is True and not any(
         item["valor"]["tipo"] == "holerite" for item in (estimate or {}).get("comprovantes", [])
@@ -332,9 +374,19 @@ def assess(process, review, cadastro=None):
             add("edícula", "atendido", "O requerimento declara que o imóvel não possui edícula.",
                 facts.get("possui_edicula"))
         elif has and rented is False and commercial is False and (inhabited is False or family is True):
-            add("edícula", "atendido", "Edícula sem aluguel nem uso comercial, "
-                + ("habitada por ascendente/descendente." if family else "sem moradores declarados."),
-                sources_of(*annex))
+            kinship = occupant_kinship(readable, unique("nome_ocupante_edicula"),
+                                       digits(unique("cpf_ocupante_edicula")), applicant, applicant_cpf)
+            if family and kinship and kinship[0] == "irmao":
+                add("edícula", "pendente", "O requerimento declara ascendente/descendente na edícula, mas o "
+                    f"documento do ocupante ({where([kinship[1]])}) tem a mesma filiação do requerente "
+                    "(irmão/irmã). Confirme o parentesco: a LC 456/2025 só admite ascendente ou descendente.",
+                    sources_of(*annex) + [evidence(kinship[1], kinship[1].get("tipo"))])
+            else:
+                proof = (f" Filiação do ocupante ({where([kinship[1]])}) confirma o parentesco."
+                         if kinship and kinship[0] == "descendente" else "")
+                add("edícula", "atendido", "Edícula sem aluguel nem uso comercial, "
+                    + ("habitada por ascendente/descendente." if family else "sem moradores declarados.") + proof,
+                    sources_of(*annex))
         elif has and inhabited and family is False:
             add("edícula", "pendente", "Edícula habitada por quem não é ascendente/descendente. "
                 "Confira o vínculo e se há cobrança de aluguel.", sources_of(*annex))
@@ -433,16 +485,26 @@ def assess(process, review, cadastro=None):
     ):
         add("leitura", "pendente", "Há arquivos ou páginas que não puderam ser lidos.")
 
+    out_of_flow = None
     if not forms:
         rules[:] = [row for row in rules if row["criterio"] in {"processamento", "processo_sei", "leitura"}]
-        add("requerimento", "pendente", "Nenhum requerimento de isenção de IPTU foi localizado no processo.")
+        out_of_flow = other_subject(pages)
+        if out_of_flow and complete:
+            add("requerimento", "fora_do_fluxo", "O processo não é pedido de isenção de IPTU para aposentado, "
+                f"pensionista ou BPC (assunto: {out_of_flow[0]}). Encaminhar ao fluxo próprio.",
+                [evidence(out_of_flow[1], out_of_flow[1].get("tipo"))])
+        else:
+            add("requerimento", "pendente", "Nenhum requerimento de isenção de IPTU foi localizado no processo.")
 
     blockers = [row["motivo"] for row in rules if row["status"] == "impedimento"]
     pending = [row["motivo"] for row in rules if row["status"] == "pendente"]
     registry = [row["motivo"] for row in rules if row["status"] == "cadastral"]
     status = "proposta_indeferimento" if blockers else "em_analise" if pending else "proposta_deferimento"
-    result = ("nao_enquadra" if blockers else "em_analise" if pending
+    result = ("fora_do_fluxo" if any(row["status"] == "fora_do_fluxo" for row in rules)
+              else "nao_enquadra" if blockers else "em_analise" if pending
               else "enquadra_conferir_cadastro" if registry else "enquadra")
+    if result == "fora_do_fluxo":
+        status = "fora_do_fluxo"
     report = {"status": status, "resultado": result,
             "pode_receber_isencao": False if blockers else None if pending else True,
             "motivos_indeferimento": blockers, "pendencias": pending, "conferencias_cadastrais": registry,
@@ -463,28 +525,74 @@ def assess(process, review, cadastro=None):
     return report
 
 
-def income_estimate(income, people):
-    """Soma comprovantes distintos da competência mais recente das pessoas indicadas.
+ASSUNTOS_FORA = ("imunidade", "revisao do lancamento", "revisao de lancamento", "cancelamento de debito",
+                  "execucao fiscal", "divida ativa", "restituicao", "contencioso", "remissao", "parcelamento")
+
+
+def other_subject(pages):
+    """Assunto de um processo que não traz requerimento de isenção de aposentado/pensionista."""
+    for row in pages:
+        text = " ".join((row.get(key) or "") for key in ("texto_pdf", "texto_ocr"))
+        match = re.search(r"assunto\s*:\s*([^\n]{3,120})", fold(text))
+        if match and any(word in match.group(1) for word in ASSUNTOS_FORA):
+            return match.group(1).strip(" .-").upper(), row
+    for row in pages:
+        text = fold(" ".join((row.get(key) or "") for key in ("texto_pdf", "texto_ocr")))
+        for word in ASSUNTOS_FORA:
+            if word in text:
+                return word.upper(), row
+    return None
+
+
+def occupant_kinship(pages, name, cpf, applicant, applicant_cpf):
+    """Compara a filiação no documento do ocupante da edícula com o requerente.
+
+    Retorna ("descendente", página) se o requerente consta na filiação do ocupante,
+    ("irmao", página) se ambos têm a mesma filiação, ou None.
+    """
+    ids = [row for row in pages if row.get("tipo") in {"identidade", "cpf"}]
+
+    def doc_of(person_name, person_cpf):
+        for row in ids:
+            data = row.get("obtido") or {}
+            if (person_cpf and digits(data.get("cpf_documento")) == person_cpf) or (
+                    person_name and same_person(data.get("nome_documento"), person_name)):
+                return row
+        return None
+
+    occupant = doc_of(name, cpf)
+    if not occupant:
+        return None
+    parents = [part for part in re.split(r"[/;\n]| e ", fold((occupant.get("obtido") or {}).get("filiacao_documento")))
+               if part.strip()]
+    if applicant and any(same_person(part, applicant) for part in parents):
+        return "descendente", occupant
+    own = doc_of(applicant, applicant_cpf)
+    own_parents = [part for part in re.split(r"[/;\n]| e ", fold((own or {}).get("obtido", {}).get("filiacao_documento")))
+                   if part.strip()]
+    if parents and own_parents and any(same_person(a, b) for a in parents for b in own_parents):
+        return "irmao", occupant
+    return None
+
+
+def income_estimate(income):
+    """Soma comprovantes distintos da competência mais recente (já filtrados por titular).
 
     Dois comprovantes com o mesmo número de benefício, ou sem número e com mesmo
-    valor, competência e titular, contam uma vez. Comprovantes de terceiros e
-    de meses anteriores ficam de fora.
+    valor e titular, contam uma vez. Meses anteriores ficam de fora.
     """
     rows = [item for item in income if item["valor"].get("competencia_renda")]
     if not rows:
         return None
     latest = max(item["valor"]["competencia_renda"] for item in rows)
-    seen, used, others = set(), [], []
+    seen, used = set(), []
     for item in rows:
         data = item["valor"]
         if data["competencia_renda"] != latest:
             continue
-        holder = person_key(data.get("titular_renda"))
-        if people and holder and holder not in people:
-            others.append(item)
-            continue
         number = digits(data.get("numero_beneficio"))
-        key = ("beneficio", number) if number else ("valor", data["renda_bruta_centavos"], holder)
+        key = ("beneficio", number) if number else (
+            "valor", data["renda_bruta_centavos"], person_key(data.get("titular_renda")))
         if key in seen:
             continue
         seen.add(key)
@@ -492,7 +600,7 @@ def income_estimate(income, people):
     if not used:
         return None
     return {"total_centavos": sum(item["valor"]["renda_bruta_centavos"] for item in used),
-            "competencia": latest, "comprovantes": used, "outros_titulares": others}
+            "competencia": latest, "comprovantes": used}
 
 
 ROTULOS = {
@@ -515,12 +623,15 @@ def write_opinion(result):
             f"Modalidade: {modality_label(summary.get('modalidade')) or 'não identificada'}",
             "Fundamento: Lei Complementar nº 456, de 18 de dezembro de 2025.", ""]
     marks = {"atendido": "Atende", "impedimento": "NÃO atende", "pendente": "Pendente",
-             "cadastral": "Conferir no cadastro", "aviso": "Aviso"}
+             "cadastral": "Conferir no cadastro", "aviso": "Aviso", "fora_do_fluxo": "Fora do fluxo"}
     body = ["Análise dos requisitos:"]
     for row in result["criterios"]:
         body.append(f"- {ROTULOS.get(row['criterio'], row['criterio'])} — {marks[row['status']]}: {row['motivo']}")
     outcome = result["resultado"]
-    if outcome == "nao_enquadra":
+    if outcome == "fora_do_fluxo":
+        end = ("Conclusão: o processo não trata de isenção de IPTU para aposentado, pensionista ou BPC "
+               "(LC 456/2025) e deve seguir o fluxo próprio do assunto.")
+    elif outcome == "nao_enquadra":
         end = (f"Conclusão: o pedido NÃO se enquadra nos requisitos da LC 456/2025. Opina-se pelo "
                f"INDEFERIMENTO da isenção, pelos seguintes motivos: " + " ".join(result["motivos_indeferimento"]))
     elif outcome == "em_analise":

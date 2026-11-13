@@ -3,12 +3,13 @@ const $ = (id) => document.getElementById(id);
 const api = '/api/lotes';
 const CHUNK = 8 * 1024 * 1024;
 const RESUME_KEY = 'iptu-upload-pendente';
-const ACCEPTED = /\.(pdf|zip|jpe?g|png|webp)$/i;
+const ACCEPTED = /\.(pdf|zip|jpe?g|png|webp|html?)$/i;
 const RESULT = {
   enquadra: 'Enquadra', enquadra_conferir_cadastro: 'Enquadra · conferir cadastro',
-  nao_enquadra: 'Não enquadra', em_analise: 'Em análise', processando: 'Processando', erro: 'Erro de leitura',
+  nao_enquadra: 'Não enquadra', em_analise: 'Em análise', fora_do_fluxo: 'Fora do fluxo',
+  processando: 'Processando', erro: 'Erro de leitura',
 };
-const MARK = {atendido: '✓', impedimento: '✕', pendente: '!', cadastral: '○', aviso: 'i'};
+const MARK = {atendido: '✓', impedimento: '✕', pendente: '!', cadastral: '○', aviso: 'i', fora_do_fluxo: '→'};
 const LABEL = {
   modalidade: 'Modalidade', identidade: 'Identificação', beneficio: 'Benefício', renda: 'Renda familiar',
   residencia: 'Residência', 'edícula': 'Edícula e uso', imovel: 'Vínculo com o imóvel', unicidade: 'Imóvel único',
@@ -74,7 +75,9 @@ async function walk(entry, prefix, out) {
 function usable(items) {
   return items.filter(({path}) => {
     const parts = path.split('/');
-    return ACCEPTED.test(path) && !parts.some((part) => part.startsWith('.') || part === '__MACOSX');
+    const name = parts[parts.length - 1];
+    // Documentos do SEI exportados sem extensão (despachos em HTML) também entram.
+    return (ACCEPTED.test(name) || !name.includes('.')) && !parts.some((part) => part.startsWith('.') || part === '__MACOSX');
   });
 }
 

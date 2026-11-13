@@ -21,6 +21,7 @@ from PIL import Image, ImageOps
 
 
 IMAGE_FORMATS = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP"}
+HTML_EXTENSIONS = {"", ".html", ".htm"}
 DOCUMENT_EXTENSIONS = {".pdf", *IMAGE_FORMATS}
 ROOT = Path(os.environ.get("IPTU_DATA_DIR", "/data"))
 CHUNK = 8 * 1024**2
@@ -51,12 +52,13 @@ ASSESSMENT_FIELDS = {
     "beneficio_aposentadoria_numero": str, "beneficio_aposentadoria_centavos": int,
     "beneficio_pensao_numero": str, "beneficio_pensao_centavos": int,
     "beneficio_bpc_numero": str, "beneficio_bpc_centavos": int,
-    "nome_documento": str, "cpf_documento": str,
+    "nome_documento": str, "cpf_documento": str, "filiacao_documento": str,
+    "nome_ocupante_edicula": str, "cpf_ocupante_edicula": str, "conjuge_beneficio_numero": str,
 }
 INCOME_FIELDS = {"renda_bruta_centavos", "competencia_renda", "titular_renda",
                  "numero_beneficio", "especie_beneficio"}
-ID_FIELDS = {"nome_documento", "cpf_documento"}
-PAGE_SCHEMA = 6
+ID_FIELDS = {"nome_documento", "cpf_documento", "filiacao_documento"}
+PAGE_SCHEMA = 7
 
 
 class ResetRequested(Exception):
@@ -246,6 +248,15 @@ def inventory(path, name):
                 suffix = parts.suffix.lower()
                 if parts.name.startswith(".") or "__MACOSX" in parts.parts:
                     continue
+                if suffix in HTML_EXTENSIONS and item.file_size <= 5 * 1024**2:
+                    with archive.open(item) as member:
+                        head = member.read(512).lstrip().lower()
+                    if head.startswith((b"<!doctype html", b"<html")):
+                        key = uuid.uuid4().hex
+                        with archive.open(item) as member:
+                            total += copy_member(member, files / key, MAX_EXTRACTED - total)
+                        add(original, key, group=group)
+                        continue
                 if suffix not in DOCUMENT_EXTENSIONS | {".zip"}:
                     add(original, error="formato_nao_processado", group=group)
                     continue
@@ -319,6 +330,23 @@ def render_page(pdf, number, extension=".pdf"):
         return png.read_bytes()
 
 
+def html_text(path):
+    """Texto de um documento HTML exportado do SEI (despachos, ofícios)."""
+    import html as html_lib
+    raw = path.read_bytes()
+    text = raw.decode("utf-8", errors="strict") if raw.startswith(b"\xef\xbb\xbf") else None
+    if text is None:
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw.decode("latin-1")
+    text = re.sub(r"(?is)<(style|script|head)[^>]*>.*?</\1>", " ", text)
+    text = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</tr>", "\n", text)
+    text = html_lib.unescape(re.sub(r"<[^>]+>", " ", text))
+    text = re.sub(r"[ \t\xa0]+", " ", text)
+    return re.sub(r"\n\s*\n+", "\n", text).strip()
+
+
 def native_page_text(pdf, number):
     try:
         completed = subprocess.run(
@@ -376,6 +404,14 @@ def page_workers():
 
 def process_page(pdf, number, evidence, analyze, extension=".pdf"):
     check_reset()
+    if extension in HTML_EXTENSIONS:
+        # Documento nativo do SEI: o texto já é exato, sem OCR nem modelo.
+        text = html_text(pdf)
+        result = {"status": "extraido", "tipo": "despacho", "obtido": {}, "texto_pdf": text,
+                  "texto_ocr": "", "status_ocr": "texto_nativo", "evidencia_tipo": text[:160],
+                  "versao_extracao": PAGE_SCHEMA, "tempos_ms": {}, "tentativas_ia": 0}
+        save(evidence, result)
+        return {}, 0, False
     result = {"status": "pagina_inacessivel"}
     texts = {}
     timing = {}
@@ -451,7 +487,7 @@ def process_batch(path, analyze):
             pdf = path / "files" / key
             extension = PurePosixPath(file["origem"]).suffix.lower()
             count_path = folder / (key + ".json")
-            if extension in IMAGE_FORMATS and not count_path.exists():
+            if (extension in IMAGE_FORMATS or extension in HTML_EXTENSIONS) and not count_path.exists():
                 save(count_path, {"paginas": 1, "total": 1})
             if not count_path.exists():
                 try:
@@ -599,16 +635,20 @@ def process_detail(path, process_id):
             documents.append(row)
             if result.get("requerimento_isencao_confirmado"):
                 candidates.append(row)
-    # A página seguinte de um requerimento confirmado (cônjuge, assinatura) faz parte dele.
-    confirmed = {(row["arquivo"], row["pagina"]) for row in candidates}
-    for row in documents:
-        if (row.get("tipo_sugerido") == "requerimento"
-                and (row["arquivo"], row["pagina"] - 1) in confirmed):
-            row.update(tipo="requerimento", obtido=row.get("obtido_nao_confirmado", {}),
-                       continuacao_requerimento=True)
-            row.pop("motivo_classificacao", None)
-            candidates.append(row)
-            confirmed.add((row["arquivo"], row["pagina"]))
+    # Outras páginas do mesmo formulário (cônjuge, atividades, assinatura) fazem parte do
+    # requerimento, antes ou depois dele e mesmo com páginas em branco no meio.
+    if candidates:
+        for row in documents:
+            if row in candidates or row.get("status") != "extraido":
+                continue
+            text = normalize_text(" ".join(row.get(key) or "" for key in ("texto_ocr", "texto_pdf")))
+            form_page = ("conjuge ou companheiro" in text
+                         and ("socio de empresa" in text or "trabalha registrado" in text))
+            if row.get("tipo_sugerido") == "requerimento" or form_page:
+                row.update(tipo="requerimento", continuacao_requerimento=True,
+                           obtido=row.get("obtido_nao_confirmado") or row.get("obtido_bruto") or {})
+                row.pop("motivo_classificacao", None)
+                candidates.append(row)
     process["paginas"] = documents
     process["requerimentos"] = candidates
     process["status"] = "em_revisao" if (folder / "complete.json").exists() else "processando"
@@ -667,6 +707,7 @@ def batch_summary(path):
                        inscricao=summary["inscricao_imobiliaria"], modalidade=summary["modalidade"],
                        renda_familiar_centavos=summary["renda_familiar_centavos"],
                        motivos=report["motivos_indeferimento"] or report["pendencias"]
+                       or [row["motivo"] for row in report["criterios"] if row["status"] == "fora_do_fluxo"]
                        or report["conferencias_cadastrais"])
         else:
             row["resultado"] = "processando"

@@ -46,7 +46,7 @@ progress { width: 100%; height: .5rem; accent-color: var(--brand); }
 .r-enquadra, .r-enquadra_conferir_cadastro { background: var(--ok-bg); color: var(--ok); }
 .r-nao_enquadra { background: var(--no-bg); color: var(--no); }
 .r-em_analise { background: var(--wait-bg); color: var(--wait); }
-.r-processando, .r-erro { background: var(--idle-bg); color: var(--idle); }
+.r-processando, .r-erro, .r-fora_do_fluxo { background: var(--idle-bg); color: var(--idle); }
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); font-weight: 600; }
 th, td { padding: .6rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -67,7 +67,7 @@ td .why { color: var(--muted); font-size: .85rem; }
 .crit li:last-child { border: 0; }
 .crit .ic { font-weight: 700; text-align: center; }
 .crit .atendido .ic { color: var(--ok); } .crit .impedimento .ic { color: var(--no); }
-.crit .pendente .ic { color: var(--wait); } .crit .cadastral .ic, .crit .aviso .ic { color: var(--idle); }
+.crit .pendente .ic { color: var(--wait); } .crit .cadastral .ic, .crit .aviso .ic, .crit .fora_do_fluxo .ic { color: var(--idle); }
 .crit strong { display: block; font-size: .9rem; }
 .crit span.m { font-size: .88rem; color: #334155; }
 .pages { display: inline-flex; gap: .3rem; flex-wrap: wrap; margin-left: .3rem; }
