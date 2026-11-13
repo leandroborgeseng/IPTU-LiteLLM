@@ -532,6 +532,16 @@ async function refreshDashboard() {
   $('k-tempo').textContent = seconds(d.tempo_medio_ms);
   $('k-tempo-sub').textContent = 'soma das páginas lidas em paralelo' + (d.ritmo_processos_hora
     ? ' · ritmo real: ' + number(d.ritmo_processos_hora) + ' processos/hora' : '');
+  const hours = d.paginas * (d.minutos_manuais_por_pagina || 1) / 60;
+  const tokens = (d.tokens_entrada || 0) + (d.tokens_saida || 0);
+  const compact = (value) => value >= 1e9 ? (value / 1e9).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' bi'
+    : value >= 1e6 ? (value / 1e6).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' mi'
+    : value >= 1e3 ? (value / 1e3).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' mil' : number(value);
+  $('k-paginas').textContent = number(d.paginas);
+  $('k-paginas-sub').textContent = '≈ ' + number(Math.round(hours)) + ' h de leitura manual (est. '
+    + number(d.minutos_manuais_por_pagina || 1) + ' min/página) · ' + compact(tokens) + ' tokens de IA';
+  $('k-paginas-sub').title = compact(d.tokens_entrada || 0) + ' tokens lidos (imagens e instruções) e '
+    + compact(d.tokens_saida || 0) + ' gerados';
   drawVolume(d.envios || []);
   drawTime(d.envios || []);
 }
@@ -1004,4 +1014,23 @@ $('capacity').onclick = async () => {
     const response = await fetch('/api/capacidade', {method: 'POST'});
     showCapacity(await response.json());
   } catch (error) { alert('Não foi possível iniciar o teste: ' + error.message); }
+};
+
+/* ---------- Administração: apagar tudo ---------- */
+$('reset-all').onclick = async () => {
+  if (!confirm('APAGAR TUDO?\n\nTodos os lotes enviados, documentos, leituras, pareceres, decisões e o histórico serão '
+    + 'apagados definitivamente. Leituras em andamento serão interrompidas. Esta ação não pode ser desfeita.')) return;
+  const typed = prompt('Para confirmar, digite APAGAR TUDO:');
+  if (typed === null) return;
+  if (typed.trim() !== 'APAGAR TUDO') { alert('Cancelado: o texto digitado não confere.'); return; }
+  try {
+    const result = await request('/api/sistema/zerar', {method: 'POST', body: JSON.stringify({confirmacao: 'APAGAR TUDO'})});
+    localStorage.removeItem(RESUME_KEY);
+    currentBatch = ''; trackedBatch = '';
+    $('job').classList.remove('on');
+    alert(number(result.processos_removidos) + ' processo(s) removido(s) do histórico. Os arquivos dos lotes são apagados '
+      + 'assim que as leituras em andamento pararem (alguns segundos a poucos minutos).');
+    await refreshBatches();
+    refreshAll();
+  } catch (error) { alert('Não foi possível apagar: ' + error.message); }
 };

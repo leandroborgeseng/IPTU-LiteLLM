@@ -1057,8 +1057,11 @@ def summary_of(detail):
         return {"resultado": "processando", "sei": detail.get("numero_processo_sei")}
     resumo = report["resumo"]
     work = sum(sum((row.get("tempos_ms") or {}).values()) for row in detail["paginas"])
+    tokens_in = sum((row.get("tokens") or {}).get("entrada") or 0 for row in detail["paginas"])
+    tokens_out = sum((row.get("tokens") or {}).get("saida") or 0 for row in detail["paginas"])
     return {**final_decision(detail),
             "sei": report["numero_processo_sei"], "resultado": report["resultado"], "tempo_ms": work or None,
+            "paginas": len(detail["paginas"]), "tokens_entrada": tokens_in, "tokens_saida": tokens_out,
             "requerente": resumo.get("requerente"), "cpf": resumo.get("cpf"),
             "inscricao": resumo.get("inscricao_imobiliaria"), "modalidade": resumo.get("modalidade"),
             "renda_familiar_centavos": resumo.get("renda_familiar_centavos"), "sintese": resumo.get("sintese"),

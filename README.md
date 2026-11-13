@@ -109,6 +109,16 @@ lendo x de y páginas, concluído, falha com motivo). O ZIP enviado é apagado a
 extraídos ficam), o que poupa ~1 GB de disco por lote. Reserve no volume `/data` cerca de 1,2× o tamanho dos
 lotes que serão mantidos.
 
+### Páginas, tokens e recomeço
+
+O indicador **Páginas de PDF tratadas** soma as páginas de todos os processos, com uma estimativa do trabalho
+manual equivalente (`IPTU_MINUTOS_MANUAIS_POR_PAGINA`, padrão 1 minuto de leitura por página) e o total de
+tokens de IA (lidos e gerados; detalhe ao passar o mouse).
+
+**Apagar tudo e recomeçar** (rodapé da página, dupla confirmação com "APAGAR TUDO") remove lotes,
+documentos, leituras, pareceres, decisões e histórico; as leituras em andamento são interrompidas. A
+auditoria registra o evento; logotipo e configurações não são afetados.
+
 ### Visual e logotipo
 
 O SIG-IPTU segue a identidade visual da Prefeitura (IBM Plex, azul #0066CC, modo escuro automático). Para exibir o

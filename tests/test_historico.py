@@ -195,3 +195,21 @@ class ApiDeIntegracao(unittest.TestCase):
         rows, totals, total = historico.search(filtro="duplicados")
         self.assertEqual((total, totals["duplicados"]), (2, 2))
         self.assertEqual(rows[0]["duplicidades"][0]["motivo"], "cpf")
+
+
+class PaginasTokensEZerar(unittest.TestCase):
+    def setUp(self):
+        historico.init(Path(tempfile.mkdtemp()) / "iptu.db")
+        for index, (pages, tin, tout) in enumerate(((17, 30000, 2000), (12, 21000, 1500))):
+            historico.upsert("L", f"P{index}", "lote", f"proc{index}",
+                             summary("enquadra", paginas=pages, tokens_entrada=tin, tokens_saida=tout), {"i": index}, "s", "x")
+
+    def test_totais_de_paginas_e_tokens(self):
+        d = historico.dashboard()
+        self.assertEqual((d["paginas"], d["tokens_entrada"], d["tokens_saida"]), (29, 51000, 3500))
+
+    def test_zerar_apaga_historico_e_registra_auditoria(self):
+        self.assertEqual(historico.reset_all("admin"), 2)
+        self.assertEqual(historico.search()[2], 0)
+        self.assertEqual(historico.versions("L", "P0"), [])
+        self.assertIn("sistema_zerado (2 processos)", historico.audit()[0]["evento"])

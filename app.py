@@ -112,12 +112,25 @@ FAST_TIMEOUT = int(os.environ.get("IPTU_LLM_TIMEOUT_RAPIDO", "60") or 60)
 TOKENS = __import__("threading").local()  # tokens das chamadas feitas por esta thread (uma página por vez)
 
 
+TOKENS_LOCK = __import__("threading").Lock()
+
+
 def note_tokens(usage):
     totals = getattr(TOKENS, "totais", None)
     if totals is not None:
-        totals["entrada"] += usage.get("prompt_tokens") or 0
-        totals["saida"] += usage.get("completion_tokens") or 0
-        totals["chamadas"] += 1
+        with TOKENS_LOCK:  # a verificação paralela soma na mesma conta da página
+            totals["entrada"] += usage.get("prompt_tokens") or 0
+            totals["saida"] += usage.get("completion_tokens") or 0
+            totals["chamadas"] += 1
+
+
+def with_tokens(totals, function, *args):
+    """Executa em outra thread somando os tokens na conta da página."""
+    TOKENS.totais = totals
+    try:
+        return function(*args)
+    finally:
+        TOKENS.totais = None
 
 
 def llm_call(body, timeout=None, waits=(2, 5, 15)):
@@ -318,8 +331,8 @@ def detail_page(model, verify_model, result, hires, timeout=None, waits=(2, 5, 1
     second_call = None
     if kind == "requerimento":
         # Leitura detalhada e verificação são independentes: correm em paralelo.
-        second_call = DETAIL_POOL.submit(ask_json, verify_model, leitura.verification_prompt(), image, 1024,
-                                         timeout, waits)
+        second_call = DETAIL_POOL.submit(with_tokens, getattr(TOKENS, "totais", None), ask_json, verify_model,
+                                         leitura.verification_prompt(), image, 1024, timeout, waits)
     status, value = ask_json(model, prompt, image, 4096, timeout, waits)
     detail = {"status": status}
     if status in {"falha_de_conexao", "erro_http"}:
@@ -691,7 +704,7 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
             self.send_error(403)
         elif self.path.startswith("/api/lotes"):
             self.handle_batches()
-        elif urlsplit(self.path).path == "/api/capacidade":
+        elif urlsplit(self.path).path in {"/api/capacidade", "/api/sistema/zerar"}:
             self.handle_history()
         elif urlsplit(self.path).path == "/pdf":
             self.handle_pdf()
@@ -782,8 +795,16 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                 self.send_json(200, CAPACITY)
             elif url.path == "/api/lotes-estado":
                 self.send_json(200, batch.lots_overview())
+            elif url.path == "/api/sistema/zerar" and self.command == "POST":
+                data = json.loads(self.read_bounded(1024))
+                if not isinstance(data, dict) or data.get("confirmacao") != "APAGAR TUDO":
+                    raise ValueError
+                removed = historico.reset_all(self.current_user())
+                batch.request_reset()  # o worker apaga os lotes assim que as leituras em andamento param
+                self.send_json(202, {"status": "apagando", "processos_removidos": removed})
             elif url.path == "/api/painel":
                 report = historico.dashboard(params["lote_id"], max(7, min(90, int(query.get("dias", "14")))))
+                report["minutos_manuais_por_pagina"] = float(os.environ.get("IPTU_MINUTOS_MANUAIS_POR_PAGINA", "1") or 1)
                 report["ritmo_processos_hora"] = batch.throughput(params["lote_id"])
                 self.send_json(200, report)
             elif url.path == "/api/processos/exportar":
@@ -1187,7 +1208,7 @@ if __name__ == "__main__":
             result["tipo"] = "requerimento"  # formulário identificado pelo texto da página
             result["formulario_pelo_texto"] = True
         result = detail_page(detail_model, verify_model, result, hires, timeout, waits)
-        result["tokens"] = TOKENS.totais  # a verificação paralela corre em outra thread e não entra na soma
+        result["tokens"] = TOKENS.totais  # inclui a verificação paralela
         TOKENS.totais = None
         return result
 

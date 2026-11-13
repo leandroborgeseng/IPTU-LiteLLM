@@ -204,6 +204,8 @@ dialog { border: 1px solid var(--line); border-radius: 12px; padding: 1.2rem 1.4
 dialog::backdrop { background: rgba(15, 27, 45, .4); }
 dialog ul { padding-left: 1.1rem; }
 .status-line { font-size: .82rem; color: var(--ink-3); }
+footer.admin { max-width: 1440px; margin: 0 auto; padding: 0 1.5rem 2rem; display: flex; gap: 1rem; align-items: center; justify-content: flex-end; }
+footer.admin button { font-size: .8rem; }
 @media (max-width: 1100px) { .charts, .intake { grid-template-columns: 1fr; } }
 @media (max-width: 860px) { #panel .body { grid-template-columns: 1fr; } #viewer-box { position: static; } }
 </style>
@@ -233,6 +235,8 @@ dialog ul { padding-left: 1.1rem; }
       <div class="value" id="k-revisao">—</div><div class="sub" id="k-revisao-sub"></div></div>
     <div class="card kpi"><div class="label"><span class="icon i-brand" aria-hidden="true">⏱</span>Tempo de IA por cidadão</div>
       <div class="value" id="k-tempo">—</div><div class="sub" id="k-tempo-sub"></div></div>
+    <div class="card kpi"><div class="label"><span class="icon i-brand" aria-hidden="true">≡</span>Páginas de PDF tratadas</div>
+      <div class="value" id="k-paginas">—</div><div class="sub" id="k-paginas-sub"></div></div>
   </section>
 
   <section class="charts">
@@ -307,6 +311,11 @@ dialog ul { padding-left: 1.1rem; }
     <p class="status-line" id="footer-status"></p>
   </section>
 </main>
+
+<footer class="admin">
+  <span class="muted small">Administração</span>
+  <button type="button" class="danger" id="reset-all">Apagar tudo e recomeçar</button>
+</footer>
 
 <dialog id="eval-box">
   <h3 style="margin-bottom:.6rem">Assertividade do lote</h3><div id="eval-body"></div>

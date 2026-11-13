@@ -69,7 +69,8 @@ def init(path):
         for name, kind in (("tempo_ms", "INTEGER"), ("analisado_em", "REAL"), ("decisao", "TEXT"),
                            ("origem_decisao", "TEXT"), ("revisado_por", "TEXT"), ("decidido_em", "REAL"),
                            ("cpf_digitos", "TEXT"), ("conjuge_digitos", "TEXT"), ("inscricao_digitos", "TEXT"),
-                           ("sei_digitos", "TEXT"), ("exercicio", "INTEGER")):
+                           ("sei_digitos", "TEXT"), ("exercicio", "INTEGER"), ("paginas", "INTEGER"),
+                           ("tokens_entrada", "INTEGER"), ("tokens_saida", "INTEGER")):
             if name not in columns:
                 db.execute(f"ALTER TABLE processos ADD COLUMN {name} {kind}")
         db.execute("CREATE INDEX IF NOT EXISTS processos_analisado ON processos(analisado_em)")
@@ -130,11 +131,13 @@ def upsert(lote_id, processo_id, lote_nome, processo, summary, report, assinatur
             digits = lambda value: "".join(ch for ch in str(value or "") if ch.isdigit()) or None  # noqa: E731
             db.execute("UPDATE processos SET analisado_em=COALESCE(analisado_em, ?), tempo_ms=?, decisao=?, "
                        "origem_decisao=?, revisado_por=?, decidido_em=?, cpf_digitos=?, conjuge_digitos=?, "
-                       "inscricao_digitos=?, sei_digitos=?, exercicio=? WHERE lote_id=? AND processo_id=?",
+                       "inscricao_digitos=?, sei_digitos=?, exercicio=?, paginas=?, tokens_entrada=?, tokens_saida=? "
+                       "WHERE lote_id=? AND processo_id=?",
                        (now, summary.get("tempo_ms"), summary.get("decisao"), summary.get("origem_decisao"),
                         summary.get("revisado_por"), summary.get("decidido_em"), digits(summary.get("cpf")),
                         digits(summary.get("cpf_conjuge")), digits(summary.get("inscricao")),
-                        digits(summary.get("sei") or processo), summary.get("exercicio"), lote_id, processo_id))
+                        digits(summary.get("sei") or processo), summary.get("exercicio"), summary.get("paginas"),
+                        summary.get("tokens_entrada"), summary.get("tokens_saida"), lote_id, processo_id))
 
 
 # Possível duplicidade no mesmo exercício: mesmo SEI (reenvio), mesmo CPF do requerente, CPF do requerente
@@ -246,6 +249,8 @@ def dashboard(lote_id="", dias=14):
                             f"GROUP BY decisao, resultado, origem_decisao", args).fetchall()
         timing = db.execute(f"SELECT avg(tempo_ms) FROM processos {clause}"
                             f"{' AND' if clause else ' WHERE'} tempo_ms IS NOT NULL", args).fetchone()
+        work = db.execute(f"SELECT coalesce(sum(paginas),0), coalesce(sum(tokens_entrada),0), "
+                          f"coalesce(sum(tokens_saida),0) FROM processos {clause}", args).fetchone()
         series = db.execute(
             f"SELECT date(analisado_em, 'unixepoch', 'localtime') AS dia, decisao, count(*) AS n, "
             f"avg(tempo_ms) AS tempo FROM processos {clause}{' AND' if clause else ' WHERE'} analisado_em >= ? "
@@ -284,6 +289,7 @@ def dashboard(lote_id="", dias=14):
         entry.pop("_n")
         report["serie"].append(entry)
     report["tempo_medio_ms"] = round(timing[0]) if timing[0] is not None else None
+    report["paginas"], report["tokens_entrada"], report["tokens_saida"] = work
     report["dias"] = dias
     report["envios"] = by_lot(lote_id)
     return report
@@ -420,3 +426,16 @@ def changed_since(since, decisao="", pagina=1, por_pagina=100):
         for row in rows:
             row["duplicidades"] = related.get((row["lote_id"], row["processo_id"]), [])
     return [integration_view(row) for row in rows], total
+
+
+def reset_all(usuario=None):
+    """Apaga o histórico de pareceres (processos e versões). A auditoria registra o evento."""
+    with _WRITE, closing(connect()) as db, db:
+        removed = db.execute("SELECT count(*) FROM processos").fetchone()[0]
+        db.execute("DELETE FROM processos")
+        db.execute("DELETE FROM versoes")
+        db.execute("INSERT INTO auditoria VALUES (?,?,?,?,?,?)",
+                   (time.time(), f"sistema_zerado ({removed} processos)", None, None, None, usuario))
+    with _WRITE, closing(connect()) as db:
+        db.execute("VACUUM")  # devolve ao disco o espaço do histórico apagado
+    return removed
