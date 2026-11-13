@@ -542,6 +542,7 @@ const LOT_REASON = {zip_invalido: 'arquivo ZIP inválido', espaco_insuficiente: 
 async function refreshBatches() {
   const lots = await request(api);
   const select = $('batches');
+  if (document.activeElement === select) return;  // não fecha o seletor enquanto o usuário escolhe
   select.replaceChildren(el('option', {value: ''}, 'Todos os lotes'),
     ...lots.map((lot) => el('option', {value: lot.id}, lot.nome + ' · ' +
       new Date((lot.criado || 0) * 1000).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}))));
@@ -562,6 +563,11 @@ async function refreshLots() {
     else if (lot.status === 'processando' && progress?.total_paginas) {
       fraction = progress.paginas_concluidas / progress.total_paginas;
       detail = number(progress.paginas_concluidas) + ' de ' + number(progress.total_paginas) + ' páginas';
+      const idle = progress.atualizado_em ? (Date.now() / 1000 - progress.atualizado_em) / 60 : null;
+      if (idle != null && idle >= 1) {
+        detail += ' · última página há ' + Math.floor(idle) + ' min';
+        if (idle >= 3) detail += ' ⚠ leitura parada: veja o Diagnóstico e o servidor de IA';
+      }
     } else if (lot.status === 'concluido') { fraction = 1; detail = lot.duracao_ms ? 'em ' + seconds(lot.duracao_ms) : ''; }
     else if (lot.status === 'falha') { detail = LOT_REASON[lot.motivo] || lot.motivo || ''; }
     const stateClass = {concluido: 'b-deferido', falha: 'b-indeferido', recebendo: 'b-pendente'}[lot.status] || 'b-processando';
@@ -571,7 +577,13 @@ async function refreshLots() {
           new Date((lot.criado || 0) * 1000).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'})].filter(Boolean).join(' · '))),
       el('div', {class: 'state'}, el('span', {class: 'badge ' + stateClass}, LOT_STATE[lot.status] || lot.status),
         el('div', {class: 'meta'}, detail)),
-      lot.status === 'concluido' ? null : el('div', {class: 'bar'}, el('i', {style: 'width:' + Math.round(100 * fraction) + '%'})));
+      lot.status === 'concluido' ? null : el('div', {class: 'bar'}, el('i', {style: 'width:' + Math.round(100 * fraction) + '%'})),
+      lot.status === 'recebendo' ? null : el('div', {class: 'lot-actions'},
+        el('button', {type: 'button', class: 'link', onclick: () => showDiagnostics(lot.id)}, 'Diagnóstico'),
+        el('button', {type: 'button', class: 'link', onclick: () => { currentBatch = lot.id; $('batches').value = lot.id;
+          view.pagina = 1; refreshAll(); document.querySelector('#rows').scrollIntoView({behavior: 'smooth', block: 'start'}); }},
+          'Ver processos'),
+        el('button', {type: 'button', class: 'link', onclick: () => rerunLot(lot.id)}, 'Reanalisar')));
   }));
 }
 
@@ -711,14 +723,16 @@ $('prev').onclick = () => { view.pagina = Math.max(1, view.pagina - 1); refreshT
 $('next').onclick = () => { view.pagina += 1; refreshTable(); };
 $('page-size').onchange = () => { view.por_pagina = Number($('page-size').value); view.pagina = 1; refreshTable(); };
 $('batches').onchange = () => { currentBatch = $('batches').value; view.pagina = 1; refreshAll(); };
-$('reanalisar').onclick = async () => {
+async function rerunLot(id) {
   if (!confirm('Reler as páginas com falha ou lidas por versão anterior em todos os processos deste lote?')) return;
   try {
-    const lot = await request(api + '/' + currentBatch + '/reanalisar', {method: 'POST'});
-    trackedBatch = currentBatch;
+    const lot = await request(api + '/' + id + '/reanalisar', {method: 'POST'});
+    trackedBatch = id;
     step('ler', lot.status === 'processando' ? 'Reanálise agendada: começa quando a leitura atual terminar.' : 'Reanalisando…', 0);
+    refreshLots();
   } catch (error) { alert('Não foi possível reanalisar: ' + error.message); }
-};
+}
+$('reanalisar').onclick = () => rerunLot(currentBatch);
 
 function refreshAll() {
   return Promise.all([refreshDashboard(), refreshLots(), refreshTable(), refreshLotActions(), refreshTracked()]);
@@ -876,7 +890,7 @@ $('notes').onsubmit = async (event) => {
 refreshBatches().then(refreshAll).catch((error) => { $('footer-status').textContent = 'Falha: ' + error.message; });
 setInterval(() => {
   if (uploading) return;
-  Promise.all([refreshLots(), refreshTracked(), refreshDashboard(), refreshLotActions(),
+  Promise.all([refreshBatches(), refreshLots(), refreshTracked(), refreshDashboard(), refreshLotActions(),
     document.activeElement !== $('search') ? refreshTable() : null]).catch(() => {});
 }, 5000);
 
@@ -921,9 +935,10 @@ const SITUACAO = {
   erro_http_503: 'LiteLLM indisponível (503)', erro_http_504: 'LiteLLM sem resposta (504)',
 };
 const ETAPA = {renderizacao_ms: 'renderização', texto_pdf_ms: 'texto do PDF', litellm_ms: 'modelo (todas as leituras da página)'};
-$('diagnostico').onclick = async () => {
+$('diagnostico').onclick = () => showDiagnostics(currentBatch);
+async function showDiagnostics(id) {
   try {
-    const d = await request(api + '/' + currentBatch + '/diagnostico');
+    const d = await request(api + '/' + id + '/diagnostico');
     const seconds = (ms) => (ms / 1000).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' s';
     const list = (entries, labels) => el('ul', {}, ...entries.map(([key, value]) =>
       el('li', {}, value + ' · ' + (labels[key] || key))));

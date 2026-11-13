@@ -111,7 +111,7 @@ lotes que serão mantidos.
 
 ### Visual e logotipo
 
-O painel segue a identidade do SIGPMF (IBM Plex, azul #0066CC, modo escuro automático). Para exibir o
+O SIG-IPTU segue a identidade visual da Prefeitura (IBM Plex, azul #0066CC, modo escuro automático). Para exibir o
 logotipo oficial, coloque `logo.svg` (ou `.png`, `.jpg`, `.webp`) em `/data/marca/` no servidor.
 
 ### Parâmetros do exercício

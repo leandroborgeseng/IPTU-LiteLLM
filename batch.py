@@ -656,7 +656,7 @@ def process_batch(path, analyze):
     workers = min(page_workers(), queued)
     if workers:
         progress = {"paginas_concluidas": total_pages - queued, "total_paginas": total_pages,
-                    "paralelismo": workers}
+                    "paralelismo": workers, "atualizado_em": time.time()}
         state["progresso"] = progress
         save(path / "batch.json", state)
         pool = ThreadPoolExecutor(max_workers=workers)
@@ -679,6 +679,7 @@ def process_batch(path, analyze):
                     stats["soma_ms"] += duration
                     stats["paginas"] += 1
                 progress["paginas_concluidas"] += 1
+                progress["atualizado_em"] = time.time()  # mostra no painel se a leitura parou
                 key = jobs[job]
                 remaining[key] -= 1
                 if not remaining[key]:

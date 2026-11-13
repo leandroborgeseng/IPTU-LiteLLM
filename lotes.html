@@ -2,11 +2,11 @@
 <html lang="pt-BR">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Isenção de IPTU · Prefeitura de Franca</title>
+<title>SIG-IPTU · Isenção de IPTU · Prefeitura de Franca</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-/* Identidade visual do SIGPMF (Prefeitura Municipal de Franca): IBM Plex, azul #0066CC, status verde/âmbar/vermelho. */
+/* Identidade visual da Prefeitura Municipal de Franca: IBM Plex, azul #0066CC, status verde/âmbar/vermelho. */
 :root {
   --bg: #F3F6FA; --surface: #FFFFFF; --surface-2: #EEF3F9; --line: #DCE3EC; --line-strong: #C9D3DF;
   --ink: #0F1B2D; --ink-2: #44546A; --ink-3: #5A6B82;
@@ -51,7 +51,7 @@ select, input, textarea { border: 1px solid var(--line-strong); border-radius: 7
 .muted { color: var(--ink-3); }
 .small { font-size: .82rem; }
 
-/* topo (padrão SIGPMF: barra branca com borda) */
+/* topo: barra branca com borda */
 .topbar { background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
 .topbar .inner { max-width: 1440px; margin: 0 auto; padding: .7rem 1.5rem; display: flex; align-items: center;
   justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
@@ -119,6 +119,7 @@ details.data-table table { font-size: .8rem; margin-top: .4rem; }
 .lot .meta { font-size: .78rem; color: var(--ink-3); }
 .lot .bar { grid-column: 1 / -1; height: 4px; }
 .lot .state { font-size: .78rem; text-align: right; }
+.lot-actions { grid-column: 1 / -1; display: flex; gap: 1rem; font-size: .8rem; }
 
 /* processos */
 .toolbar { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; margin-bottom: .75rem; }
@@ -211,7 +212,7 @@ dialog ul { padding-left: 1.1rem; }
   <div class="brand"><img id="logo" src="/marca/logo" alt="Prefeitura Municipal de Franca" hidden
       onload="this.hidden=false;document.getElementById('logo-mark').hidden=true">
     <div class="mark" id="logo-mark" aria-hidden="true">IP</div>
-    <div><h1>Isenção de IPTU <span id="exercicio">2027</span> <span class="tag-env">SIGPMF</span></h1>
+    <div><h1>Isenção de IPTU <span id="exercicio">2027</span> <span class="tag-env">SIG-IPTU</span></h1>
       <small>Prefeitura Municipal de Franca · análise automática de requerimentos · LC 456/2025</small></div></div>
   <nav>
     <label>Lote <select id="batches"><option value="">Todos os lotes</option></select></label>
