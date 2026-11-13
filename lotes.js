@@ -372,6 +372,12 @@ function svg(tag, attrs = {}, ...children) {
   return node;
 }
 function number(value) { return value == null ? '—' : value.toLocaleString('pt-BR'); }
+function compact(value) {
+  if (value == null) return '—';
+  const fmt = (v) => v.toLocaleString('pt-BR', {maximumFractionDigits: 1});
+  return value >= 1e9 ? fmt(value / 1e9) + ' bi' : value >= 1e6 ? fmt(value / 1e6) + ' mi'
+    : value >= 1e3 ? fmt(value / 1e3) + ' mil' : number(value);
+}
 function seconds(ms) {
   if (ms == null) return '—';
   const s = ms / 1000;
@@ -409,7 +415,7 @@ function drawVolume(lots) {
   }
   const W = 640, H = 190, left = 34, bottom = 22, top = 8, plotH = H - bottom - top;
   const max = niceMax(Math.max(...totals));
-  const band = (W - left) / rows.length, barW = Math.min(24, band * 0.6);
+  const band = (W - left) / rows.length, barW = Math.max(3, Math.min(24, band * 0.6));
   const chart = svg('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Processos analisados por dia, por decisão'});
   for (const tick of [0, max / 2, max]) {
     const y = top + plotH - (tick / max) * plotH;
@@ -439,12 +445,17 @@ function drawVolume(lots) {
     }
     const step = Math.ceil(rows.length / 7);
     const labeled = rows.length <= 8 || index === rows.length - 1 || (index % step === 0 && index < rows.length - step);
-    if (labeled) {
+    // com muitos envios, rótulos curtos (número do envio na ordem) para caber no eixo
+    if (labeled && rows.length > 16) {
+      chart.append(svg('text', {x: x + barW / 2, y: H - 6, 'text-anchor': 'middle', 'font-size': 11,
+        'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, '#' + (index + 1)));
+    }
+    if (labeled && rows.length <= 16) {
       chart.append(svg('text', {x: x + barW / 2, y: H - 6, 'text-anchor': 'middle', 'font-size': 11, 'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, lotLabel(row)));
     }
     const hit = svg('rect', {x: left + index * band, y: top, width: band, height: plotH, fill: 'transparent'});
     hit.addEventListener('mouseenter', () => {
-      tip.replaceChildren(el('b', {}, lotTitle(row)), el('div', {}, number(totals[index]) + ' processos'),
+      tip.replaceChildren(el('b', {}, '#' + (index + 1) + ' · ' + lotTitle(row)), el('div', {}, number(totals[index]) + ' processos'),
         ...keys.filter((key) => row[key]).map((key) => el('div', {}, STATUS_NAME[key] + ': ' + number(row[key]))));
       tip.style.left = ((x + barW / 2) / W * 100) + '%';
       tip.style.top = ((top + plotH - (totals[index] / max) * plotH) / H * 190) + 'px';
@@ -460,21 +471,23 @@ function drawVolume(lots) {
       ...keys.map((key) => el('td', {}, number(row[key]))))))));
 }
 
-function drawTime(lots) {
-  const box = $('chart-tempo');
-  const days = lots;  // um ponto por envio, na ordem de envio
-  const points = lots.map((lot, index) => ({lot, index, ms: lot.tempo_medio_ms})).filter((p) => p.ms != null);
+function drawLine(boxId, tableId, lots, spec) {
+  // Uma série por envio, na ordem de envio (tempo de IA por cidadão ou tokens).
+  const box = $(boxId);
+  const days = lots;
+  const points = lots.map((lot, index) => ({lot, index, ms: spec.value(lot)})).filter((p) => p.ms != null);
+  const seconds = spec.format;
   if (!points.length) {
-    box.replaceChildren(el('div', {class: 'chart-empty'}, 'Sem medições de tempo ainda.'));
-    $('table-tempo').replaceChildren();
+    box.replaceChildren(el('div', {class: 'chart-empty'}, spec.empty));
+    $(tableId).replaceChildren();
     return;
   }
   const W = 480, H = 190, left = 44, bottom = 22, top = 12, right = 12, plotH = H - bottom - top;
-  const max = niceMax(Math.max(...points.map((p) => p.ms)) / 1000) * 1000;
+  const max = spec.axisMax(Math.max(...points.map((p) => p.ms)));
   const xAt = (index) => days.length === 1 ? left + (W - left - right) / 2
     : left + (index / Math.max(1, days.length - 1)) * (W - left - right);
   const yAt = (ms) => top + plotH - (ms / max) * plotH;
-  const chart = svg('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Tempo médio de análise por cidadão, por dia'});
+  const chart = svg('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': spec.label});
   for (const tick of [0, max / 2, max]) {
     chart.append(svg('line', {x1: left, x2: W - right, y1: yAt(tick), y2: yAt(tick), stroke: 'var(--line)', 'stroke-width': 1}),
       svg('text', {x: left - 6, y: yAt(tick) + 4, 'text-anchor': 'end', 'font-size': 11, 'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, seconds(tick)));
@@ -484,14 +497,15 @@ function drawTime(lots) {
   const cross = svg('line', {y1: top, y2: top + plotH, stroke: 'var(--line-strong)', 'stroke-width': 1, visibility: 'hidden'});
   chart.append(cross);
   for (const p of points) {
-    chart.append(svg('circle', {cx: xAt(p.index), cy: yAt(p.ms), r: 4, fill: 'var(--accent)', stroke: 'var(--surface)', 'stroke-width': 2}));
+    chart.append(svg('circle', {cx: xAt(p.index), cy: yAt(p.ms), r: days.length > 30 ? 3 : 4, fill: 'var(--accent)', stroke: 'var(--surface)', 'stroke-width': 2}));
   }
   const last = points[points.length - 1];
   chart.append(svg('text', {x: xAt(last.index), y: yAt(last.ms) - 9, 'text-anchor': 'end', 'font-size': 11, 'font-weight': 600,
     fill: 'var(--ink)'}, seconds(last.ms)));
+  const shortLabel = (lot) => days.length > 16 ? '#' + (days.indexOf(lot) + 1) : lotLabel(lot);
   for (const index of [...new Set([0, Math.floor((days.length - 1) / 2), days.length - 1])]) {
     chart.append(svg('text', {x: xAt(index), y: H - 6, 'text-anchor': days.length === 1 ? 'middle' : index ? (index === days.length - 1 ? 'end' : 'middle') : 'start',
-      'font-size': 11, 'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, lotLabel(days[index])));
+      'font-size': 11, 'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, shortLabel(days[index])));
   }
   const tip = tooltip(box);
   const overlay = svg('rect', {x: left, y: top, width: W - left - right, height: plotH, fill: 'transparent'});
@@ -502,7 +516,7 @@ function drawTime(lots) {
     const nearest = points.reduce((best, p) => Math.abs(p.index / span - ratio) < Math.abs(best.index / span - ratio) ? p : best);
     cross.setAttribute('x1', xAt(nearest.index)); cross.setAttribute('x2', xAt(nearest.index));
     cross.setAttribute('visibility', 'visible');
-    tip.replaceChildren(el('b', {}, lotTitle(nearest.lot)), el('div', {}, 'Tempo médio por cidadão: ' + seconds(nearest.ms)));
+    tip.replaceChildren(el('b', {}, '#' + (nearest.index + 1) + ' · ' + lotTitle(nearest.lot)), ...spec.tooltip(nearest.lot));
     tip.style.left = (xAt(nearest.index) / W * 100) + '%';
     tip.style.top = (yAt(nearest.ms) / H * 190) + 'px';
     tip.style.display = 'block';
@@ -510,8 +524,10 @@ function drawTime(lots) {
   overlay.addEventListener('mouseleave', () => { tip.style.display = 'none'; cross.setAttribute('visibility', 'hidden'); });
   chart.append(overlay);
   box.replaceChildren(chart, tip);
-  $('table-tempo').replaceChildren(el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Envio'), el('th', {}, 'Tempo médio por cidadão'))),
-    el('tbody', {}, ...points.map((p) => el('tr', {}, el('td', {}, lotTitle(p.lot)), el('td', {}, seconds(p.ms)))))));
+  $(tableId).replaceChildren(el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Envio'),
+    ...spec.columns.map(([title]) => el('th', {}, title)))),
+    el('tbody', {}, ...points.map((p) => el('tr', {}, el('td', {}, lotTitle(p.lot)),
+      ...spec.columns.map(([, cell]) => el('td', {}, cell(p.lot))))))));
 }
 
 async function refreshDashboard() {
@@ -529,21 +545,29 @@ async function refreshDashboard() {
   $('k-revisao').textContent = number(d.revisao_manual);
   $('k-revisao-sub').textContent = [pct(d.revisao_manual), d.fora_do_fluxo ? number(d.fora_do_fluxo) + ' fora do fluxo' : '']
     .filter(Boolean).join(' · ');
-  $('k-tempo').textContent = seconds(d.tempo_medio_ms);
-  $('k-tempo-sub').textContent = 'soma das páginas lidas em paralelo' + (d.ritmo_processos_hora
-    ? ' · ritmo real: ' + number(d.ritmo_processos_hora) + ' processos/hora' : '');
-  const hours = d.paginas * (d.minutos_manuais_por_pagina || 1) / 60;
   const tokens = (d.tokens_entrada || 0) + (d.tokens_saida || 0);
-  const compact = (value) => value >= 1e9 ? (value / 1e9).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' bi'
-    : value >= 1e6 ? (value / 1e6).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' mi'
-    : value >= 1e3 ? (value / 1e3).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' mil' : number(value);
+  $('k-tokens').textContent = compact(tokens);
+  $('k-tokens-sub').textContent = compact(d.tokens_entrada || 0) + ' lidos · ' + compact(d.tokens_saida || 0) + ' gerados'
+    + (d.tokens_por_processo ? ' · ' + compact(d.tokens_por_processo) + ' por cidadão' : '');
+  $('k-tempo').textContent = seconds(d.tempo_medio_ms);
+  $('k-tempo-sub').textContent = 'soma das páginas, lidas em paralelo' + (d.ritmo_processos_hora
+    ? ' · ritmo real ' + number(d.ritmo_processos_hora) + ' processos/hora' : '');
+  const hours = d.paginas * (d.minutos_manuais_por_pagina || 1) / 60;
   $('k-paginas').textContent = number(d.paginas);
   $('k-paginas-sub').textContent = '≈ ' + number(Math.round(hours)) + ' h de leitura manual (est. '
-    + number(d.minutos_manuais_por_pagina || 1) + ' min/página) · ' + compact(tokens) + ' tokens de IA';
-  $('k-paginas-sub').title = compact(d.tokens_entrada || 0) + ' tokens lidos (imagens e instruções) e '
-    + compact(d.tokens_saida || 0) + ' gerados';
+    + number(d.minutos_manuais_por_pagina || 1) + ' min/página)';
   drawVolume(d.envios || []);
-  drawTime(d.envios || []);
+  drawLine('chart-tempo', 'table-tempo', d.envios || [], {
+    value: (lot) => lot.tempo_medio_ms, format: seconds, label: 'Tempo de IA por cidadão em cada envio',
+    axisMax: (value) => niceMax(value / 1000) * 1000, empty: 'Sem medições de tempo ainda.',
+    tooltip: (lot) => [el('div', {}, 'Tempo de IA por cidadão: ' + seconds(lot.tempo_medio_ms))],
+    columns: [['Tempo de IA por cidadão', (lot) => seconds(lot.tempo_medio_ms)]]});
+  drawLine('chart-tokens', 'table-tokens', d.envios || [], {
+    value: (lot) => lot.tokens, format: compact, label: 'Tokens de IA usados em cada envio', axisMax: niceMax,
+    empty: 'Sem registro de tokens ainda (conta a partir dos envios lidos na versão atual).',
+    tooltip: (lot) => [el('div', {}, number(lot.tokens) + ' tokens'),
+      lot.tokens_por_processo ? el('div', {}, compact(lot.tokens_por_processo) + ' por cidadão') : null].filter(Boolean),
+    columns: [['Tokens', (lot) => number(lot.tokens)], ['Por cidadão', (lot) => number(lot.tokens_por_processo)]]});
 }
 
 /* ---------- Lotes enviados ---------- */

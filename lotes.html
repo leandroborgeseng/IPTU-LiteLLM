@@ -2,6 +2,7 @@
 <html lang="pt-BR">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light only">
 <title>SIG-IPTU · Isenção de IPTU · Prefeitura de Franca</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -22,14 +23,7 @@
   font: 14px/1.45 var(--font-body); color: var(--ink); background: var(--bg); font-variant-numeric: tabular-nums;
   color-scheme: light;
 }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --bg: #0C141F; --surface: #131E2D; --surface-2: #1A2738; --line: #26364C; --line-strong: #31455F;
-  --ink: #E5ECF5; --ink-2: #B4C2D4; --ink-3: #93A4BA;
-  --brand: #4C9BFF; --brand-2: #4C9BFF; --accent: #4C9BFF; --accent-soft: #16304F; --accent-ink: #06121F;
-  --good: #4CC28A; --good-ink: #4CC28A; --good-bg: #123227;
-  --critical: #F0716A; --critical-ink: #F0716A; --critical-bg: #3D1918;
-  --warning: #E3A13B; --warning-ink: #E3A13B; --warning-bg: #3A2A10;
-  --neutral: #7D8DA3; --neutral-ink: #B4C2D4; --neutral-bg: #1A2738; color-scheme: dark; } }
+/* Sempre no modo claro, de dia ou de noite. */
 * { box-sizing: border-box; }
 body { margin: 0; }
 a { color: var(--brand-2); text-decoration: none; }
@@ -73,7 +67,8 @@ main { max-width: 1440px; margin: 0 auto; padding: 1.25rem 1.5rem 2rem; display:
 .card-head .muted { font-size: .82rem; }
 
 /* indicadores */
-.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1rem; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .8rem; }
+.kpi .value { white-space: nowrap; }
 .kpi { padding: .95rem 1.1rem; }
 .kpi .label { font-size: 12px; color: var(--ink-3); display: flex; align-items: center; gap: .45rem; }
 .kpi .value { font: 600 30px/1.1 var(--font-display); margin-top: .25rem; }
@@ -84,7 +79,7 @@ main { max-width: 1440px; margin: 0 auto; padding: 1.25rem 1.5rem 2rem; display:
 .i-good { background: var(--good); } .i-critical { background: var(--critical); }
 .i-warning { background: var(--warning); color: #3b2a00; } .i-neutral { background: var(--neutral); }
 .i-brand { background: var(--accent); }
-.charts { display: grid; grid-template-columns: 1.35fr 1fr; gap: 1rem; }
+.charts { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 1rem; }
 .chart { position: relative; }
 .chart svg { display: block; width: 100%; height: 190px; overflow: visible; }
 .legend { display: flex; gap: 1rem; flex-wrap: wrap; font-size: .8rem; color: var(--ink-2); margin-top: .5rem; }
@@ -206,7 +201,9 @@ dialog ul { padding-left: 1.1rem; }
 .status-line { font-size: .82rem; color: var(--ink-3); }
 footer.admin { max-width: 1440px; margin: 0 auto; padding: 0 1.5rem 2rem; display: flex; gap: 1rem; align-items: center; justify-content: flex-end; }
 footer.admin button { font-size: .8rem; }
-@media (max-width: 1100px) { .charts, .intake { grid-template-columns: 1fr; } }
+@media (max-width: 1250px) { .charts { grid-template-columns: 1fr 1fr; } .charts > :first-child { grid-column: 1 / -1; } }
+@media (max-width: 1100px) { .intake { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .charts { grid-template-columns: 1fr; } }
 @media (max-width: 860px) { #panel .body { grid-template-columns: 1fr; } #viewer-box { position: static; } }
 </style>
 
@@ -235,12 +232,14 @@ footer.admin button { font-size: .8rem; }
       <div class="value" id="k-revisao">—</div><div class="sub" id="k-revisao-sub"></div></div>
     <div class="card kpi"><div class="label"><span class="icon i-brand" aria-hidden="true">⏱</span>Tempo de IA por cidadão</div>
       <div class="value" id="k-tempo">—</div><div class="sub" id="k-tempo-sub"></div></div>
+    <div class="card kpi"><div class="label"><span class="icon i-brand" aria-hidden="true">◆</span>Tokens de IA usados</div>
+      <div class="value" id="k-tokens">—</div><div class="sub" id="k-tokens-sub"></div></div>
     <div class="card kpi"><div class="label"><span class="icon i-brand" aria-hidden="true">≡</span>Páginas de PDF tratadas</div>
       <div class="value" id="k-paginas">—</div><div class="sub" id="k-paginas-sub"></div></div>
   </section>
 
   <section class="charts">
-    <div class="card"><div class="card-head"><h2>Processos analisados por envio</h2><span class="muted">últimos 14 envios · por decisão</span></div>
+    <div class="card"><div class="card-head"><h2>Processos analisados por envio</h2><span class="muted">todos os envios · por decisão</span></div>
       <div class="chart" id="chart-volume"></div>
       <div class="legend" aria-hidden="true">
         <span><span class="icon i-good">✓</span>Aceito</span><span><span class="icon i-critical">✕</span>Não aceito</span>
@@ -248,9 +247,13 @@ footer.admin button { font-size: .8rem; }
         <span><span class="icon" style="background:var(--line-strong)">…</span>Em leitura</span></div>
       <details class="data-table"><summary>Ver os dados</summary><div id="table-volume"></div></details>
     </div>
-    <div class="card"><div class="card-head"><h2>Tempo de IA por cidadão em cada envio</h2><span class="muted">últimos 14 envios</span></div>
+    <div class="card"><div class="card-head"><h2>Tempo de IA por cidadão</h2><span class="muted">por envio</span></div>
       <div class="chart" id="chart-tempo"></div>
       <details class="data-table"><summary>Ver os dados</summary><div id="table-tempo"></div></details>
+    </div>
+    <div class="card"><div class="card-head"><h2>Tokens de IA</h2><span class="muted">por envio · lidos + gerados</span></div>
+      <div class="chart" id="chart-tokens"></div>
+      <details class="data-table"><summary>Ver os dados</summary><div id="table-tokens"></div></details>
     </div>
   </section>
 

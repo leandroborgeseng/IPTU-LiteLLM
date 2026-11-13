@@ -250,7 +250,7 @@ def dashboard(lote_id="", dias=14):
         timing = db.execute(f"SELECT avg(tempo_ms) FROM processos {clause}"
                             f"{' AND' if clause else ' WHERE'} tempo_ms IS NOT NULL", args).fetchone()
         work = db.execute(f"SELECT coalesce(sum(paginas),0), coalesce(sum(tokens_entrada),0), "
-                          f"coalesce(sum(tokens_saida),0) FROM processos {clause}", args).fetchone()
+                          f"coalesce(sum(tokens_saida),0), count(tokens_entrada) FROM processos {clause}", args).fetchone()
         series = db.execute(
             f"SELECT date(analisado_em, 'unixepoch', 'localtime') AS dia, decisao, count(*) AS n, "
             f"avg(tempo_ms) AS tempo FROM processos {clause}{' AND' if clause else ' WHERE'} analisado_em >= ? "
@@ -289,14 +289,15 @@ def dashboard(lote_id="", dias=14):
         entry.pop("_n")
         report["serie"].append(entry)
     report["tempo_medio_ms"] = round(timing[0]) if timing[0] is not None else None
-    report["paginas"], report["tokens_entrada"], report["tokens_saida"] = work
+    report["paginas"], report["tokens_entrada"], report["tokens_saida"], counted = work
+    report["tokens_por_processo"] = round((report["tokens_entrada"] + report["tokens_saida"]) / counted) if counted else None
     report["dias"] = dias
     report["envios"] = by_lot(lote_id)
     return report
 
 
-def by_lot(lote_id="", limite=14):
-    """Últimos envios (lotes), em ordem de envio: decisões e tempo médio por cidadão em cada um."""
+def by_lot(lote_id="", limite=1000):
+    """Envios (lotes), em ordem de envio: decisões, tempo e tokens por cidadão em cada um."""
     clause, args = _filters(lote_id=lote_id)
     names = {"deferido": "aceitos", "indeferido": "nao_aceitos", "pendente": "revisao_manual", "fora_do_fluxo": "fora_do_fluxo"}
     with closing(connect()) as db:
@@ -316,6 +317,12 @@ def by_lot(lote_id="", limite=14):
             average = db.execute("SELECT avg(tempo_ms) FROM processos WHERE lote_id=? AND tempo_ms IS NOT NULL",
                                  (lot["lote_id"],)).fetchone()[0]
             entry["tempo_medio_ms"] = round(average) if average is not None else None
+            tokens, counted = db.execute(
+                "SELECT coalesce(sum(coalesce(tokens_entrada,0) + coalesce(tokens_saida,0)),0), "
+                "count(tokens_entrada) FROM processos WHERE lote_id=? AND tokens_entrada IS NOT NULL",
+                (lot["lote_id"],)).fetchone()
+            entry["tokens"] = tokens if counted else None
+            entry["tokens_por_processo"] = round(tokens / counted) if counted else None
             result.append(entry)
     return result
 
