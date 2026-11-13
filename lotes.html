@@ -199,6 +199,9 @@ dialog { border: 1px solid var(--line); border-radius: 12px; padding: 1.2rem 1.4
 dialog::backdrop { background: rgba(15, 27, 45, .4); }
 dialog ul { padding-left: 1.1rem; }
 .status-line { font-size: .82rem; color: var(--ink-3); }
+.banner { background: var(--accent-soft); color: var(--brand); border: 1px solid #c9daf1; border-radius: var(--radius);
+  padding: .6rem 1rem; font-size: .88rem; display: flex; gap: .8rem; align-items: center; }
+.banner .bar { flex: 1; max-width: 280px; }
 footer.admin { max-width: 1440px; margin: 0 auto; padding: 0 1.5rem 2rem; display: flex; gap: 1rem; align-items: center; justify-content: flex-end; }
 footer.admin button { font-size: .8rem; }
 @media (max-width: 1250px) { .charts { grid-template-columns: 1fr 1fr; } .charts > :first-child { grid-column: 1 / -1; } }
@@ -220,6 +223,7 @@ footer.admin button { font-size: .8rem; }
 </div></div>
 
 <main>
+  <div class="banner" id="recalc" hidden role="status"></div>
   <!-- Indicadores -->
   <section class="kpis" aria-label="Indicadores">
     <div class="card kpi"><div class="label"><span class="icon i-brand" aria-hidden="true">#</span>Processados</div>

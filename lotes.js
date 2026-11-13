@@ -533,6 +533,13 @@ function drawLine(boxId, tableId, lots, spec) {
 async function refreshDashboard() {
   const d = await request('/api/painel?' + new URLSearchParams(currentBatch ? {lote: currentBatch} : {}));
   const pct = (value) => d.processados ? Math.round(100 * value / d.processados) + '%' : '';
+  const recalc = d.recalculando;
+  $('recalc').hidden = !recalc;
+  if (recalc) {
+    $('recalc').replaceChildren(el('span', {}, 'Atualizando os pareceres com as regras novas: ' + number(recalc.feitos)
+      + ' de ' + number(recalc.total) + ' processos. Números e lista se ajustam ao terminar.'),
+      el('div', {class: 'bar'}, el('i', {style: 'width:' + Math.round(100 * recalc.feitos / Math.max(1, recalc.total)) + '%'})));
+  }
   $('k-processados').textContent = number(d.processados);
   $('k-processados-sub').textContent = (d.processando ? number(d.processando) + ' em leitura · ' : '')
     + number(d.com_revisao_humana) + ' com revisão humana';

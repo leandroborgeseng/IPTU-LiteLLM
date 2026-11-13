@@ -1094,9 +1094,13 @@ def sync_process(path, process_id, motivo="atualizacao"):
     return detail
 
 
+SYNC = {"total": 0, "feitos": 0}  # progresso do recálculo dos pareceres (mudança de regras, leituras novas)
+
+
 def sync_all():
-    """Grava no banco os processos novos ou alterados de todos os lotes."""
+    """Grava no banco os processos novos ou alterados de todos os lotes (inclusive após mudança de regras)."""
     stored = historico.signatures()
+    todo = []
     for meta in ROOT.glob("*/batch.json"):
         path = meta.parent
         manifest_path = path / "manifest.json"
@@ -1109,9 +1113,19 @@ def sync_all():
         for item in manifest:
             try:
                 if stored.get((path.name, item["id"])) != process_signature(path, item["id"]):
-                    sync_process(path, item["id"], "leitura" if (path.name, item["id"]) not in stored else "atualizacao")
-            except (OSError, ValueError, KeyError) as error:
-                print(f"Falha ao gravar histórico {path.name[:8]}/{item['id'][:8]}: {type(error).__name__}", flush=True)
+                    todo.append((path, item["id"]))
+            except OSError:
+                continue
+    SYNC.update(total=len(todo), feitos=0)
+    for path, process_id in todo:
+        if reset_pending():
+            break
+        try:
+            sync_process(path, process_id, "leitura" if (path.name, process_id) not in stored else "atualizacao")
+        except (OSError, ValueError, KeyError) as error:
+            print(f"Falha ao gravar histórico {path.name[:8]}/{process_id[:8]}: {type(error).__name__}", flush=True)
+        SYNC["feitos"] += 1
+    SYNC.update(total=0, feitos=0)
 
 
 def delete_process(path, process_id):

@@ -213,3 +213,28 @@ class PaginasTokensEZerar(unittest.TestCase):
         self.assertEqual(historico.search()[2], 0)
         self.assertEqual(historico.versions("L", "P0"), [])
         self.assertIn("sistema_zerado (2 processos)", historico.audit()[0]["evento"])
+
+
+@unittest.skipIf(batch is None, "dependência ausente")
+class RecalculoAposMudancaDeRegras(unittest.TestCase):
+    def test_mudanca_de_regras_recalcula_todos_os_processos(self):
+        setup = ExclusaoEExportacao()
+        setup.setUp()
+        root, saved = batch.ROOT, batch.RULES_VERSION
+        batch.ROOT = setup.lot.parent
+        try:
+            batch.sync_all()
+            first = {r["processo_id"]: r["versao"] for r in historico.search()[0]}
+            self.assertEqual(sorted(first), sorted([setup.p1, setup.p2]))
+            calls = []
+            original = batch.sync_process
+            batch.sync_process = lambda *a: (calls.append(a[1]), original(*a))[1]
+            batch.sync_all()  # nada mudou: não recalcula
+            self.assertEqual(calls, [])
+            batch.RULES_VERSION = "regras-novas"
+            batch.sync_all()  # regras mudaram: recalcula todos
+            self.assertEqual(sorted(calls), sorted([setup.p1, setup.p2]))
+            self.assertEqual(batch.SYNC, {"total": 0, "feitos": 0})
+        finally:
+            batch.sync_process = original if "original" in dir() else batch.sync_process
+            batch.ROOT, batch.RULES_VERSION = root, saved

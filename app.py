@@ -830,6 +830,7 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
             elif url.path == "/api/painel":
                 report = historico.dashboard(params["lote_id"], max(7, min(90, int(query.get("dias", "14")))))
                 report["minutos_manuais_por_pagina"] = float(os.environ.get("IPTU_MINUTOS_MANUAIS_POR_PAGINA", "1") or 1)
+                report["recalculando"] = dict(batch.SYNC) if batch.SYNC["total"] > 1 else None
                 report["ritmo_processos_hora"] = batch.throughput(params["lote_id"])
                 self.send_json(200, report)
             elif url.path == "/api/processos/exportar":
