@@ -184,3 +184,43 @@ class ChamadasAoModelo(unittest.TestCase):
             "renda_bruta_centavos": 162100, "competencia_renda": "2026-03", "titular_renda": "X",
             "numero_beneficio": "1"}}, hires=lambda: b"img")
         self.assertEqual(result["leitura_detalhada"]["status"], "dispensada")
+
+
+class FormularioPeloTexto(unittest.TestCase):
+    def test_paginas_do_formulario(self):
+        self.assertTrue(leitura.is_form_page("Prefeitura Municipal de Franca\nREQUERIMENTO DE ISENÇÃO DE IPTU 2027\nNome:"))
+        self.assertTrue(leitura.is_form_page("DECLARAÇÃO DE ISENÇÃO DE IPTU\nNº Processo"))
+        self.assertTrue(leitura.is_form_page("É Caso de Usufrutuário? Beneficiário Reside no Imóvel? O Imóvel Possui Edícula?"))
+        self.assertTrue(leitura.is_form_page("É Sócio de Empresa? Trabalha Registrado? Nome do Cônjuge ou Companheiro:"))
+
+    def test_outros_documentos(self):
+        self.assertFalse(leitura.is_form_page("ESCRITURA PÚBLICA DE VENDA E COMPRA ... imóvel residencial"))
+        self.assertFalse(leitura.is_form_page("Despacho: deferida a isenção de IPTU ao requerente"))
+        self.assertFalse(leitura.is_form_page(""))
+
+    def test_pagina_classificada_errado_vira_requerimento(self):
+        try:
+            import batch
+        except ModuleNotFoundError:
+            self.skipTest("dependência ausente")
+        result = batch.validate_page_kind({"status": "extraido", "tipo": "outro", "obtido": {"x": 1}},
+                                          {"texto_ocr": "REQUERIMENTO DE ISENÇÃO DE IPTU 2027"})
+        self.assertEqual((result["tipo"], result.get("requerimento_isencao_confirmado")), ("requerimento", True))
+
+
+class ModalidadePeloBeneficio(unittest.TestCase):
+    def test_bpc_e_pensao_do_conjuge_nao_contam(self):
+        process = base_process()
+        form = process["requerimentos"][0]["obtido"]
+        form.update(modalidade_criterio="aposentadoria, bpc, pensao", beneficio_pensao_numero=None,
+                    beneficio_pensao_centavos=None)
+        del process["paginas"][3]  # sem extrato de pensão
+        report = parecer.assess(process, None)
+        self.assertEqual(report["modalidade"], "aposentadoria")
+
+    def test_sem_numeros_declarados_usa_a_marcacao(self):
+        process = base_process()
+        form = process["requerimentos"][0]["obtido"]
+        for key in ("beneficio_aposentadoria_numero", "beneficio_pensao_numero"):
+            form[key] = None
+        self.assertEqual(parecer.assess(process, None)["modalidade"], "aposentadoria+pensao")

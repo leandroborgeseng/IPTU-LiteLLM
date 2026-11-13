@@ -192,7 +192,12 @@ def assess(process, review, cadastro=None):
 
     # Modalidade e condição para propor indeferimento.
     exercise = unique("exercicio")
-    modalities = set().union(*(modality_parts(item["valor"]) for item in facts.get("modalidade_criterio", [])))
+    # Modalidade pelos benefícios do próprio requerente declarados no formulário; as perguntas sobre
+    # cônjuge e dependente (BPC, pensão) não contam. Sem números declarados, usa a marcação lida.
+    declared_kinds = {kind for kind in BENEFICIOS_DECLARADOS
+                      if unique(f"beneficio_{kind}_numero") or unique(f"beneficio_{kind}_centavos")}
+    marked = set().union(*(modality_parts(item["valor"]) for item in facts.get("modalidade_criterio", [])))
+    modalities = declared_kinds | (marked & SOCIAIS) if declared_kinds else marked
     modality = "+".join(sorted(modalities)) or None
     complete = process["status"] == "em_revisao"
     eligible_modality = bool(modalities) and modalities <= ELEGIVEIS

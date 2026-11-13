@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 from threading import BoundedSemaphore, Event, Lock, RLock, Thread
 
+import leitura
 import parecer
 import sil
 
@@ -80,7 +81,7 @@ ASSESSMENT_FIELDS = {
 INCOME_FIELDS = {"renda_bruta_centavos", "competencia_renda", "titular_renda",
                  "numero_beneficio", "especie_beneficio"}
 ID_FIELDS = {"nome_documento", "cpf_documento", "filiacao_documento"}
-PAGE_SCHEMA = 8
+PAGE_SCHEMA = 9
 
 
 class ResetRequested(Exception):
@@ -419,6 +420,10 @@ def normalize_text(text):
 
 
 def validate_page_kind(result, texts):
+    page = " ".join(texts.get(key, "") or "" for key in ("texto_ocr", "texto_pdf"))
+    if result.get("status") == "extraido" and leitura.is_form_page(page):
+        # O texto da própria página identifica o formulário de isenção da Prefeitura.
+        return {**result, "tipo": "requerimento", "requerimento_isencao_confirmado": True}
     if result.get("tipo") != "requerimento":
         return result
     quote = normalize_text(result.get("evidencia_tipo") or "")

@@ -23,8 +23,10 @@ REQUERIMENTO = (
     "exercicio (ano no título), nome_requerente (Nome), cpf_requerente (CIN/CPF), "
     "endereco_declarado (Endereço + Nº + Complemento + Bairro), estado_civil (Solteiro, Casado, "
     "União Estável, Divorciado ou Viúvo, conforme marcado), "
-    "modalidade_criterio (aposentadoria, pensao, bpc, renda_mensal_vitalicia, pcd; várias separadas por vírgula, "
-    "pelas perguntas É Aposentado?/É Pensionista?/Tipo de Benefício marcadas Sim), "
+    "modalidade_criterio (aposentadoria, pensao, bpc, renda_mensal_vitalicia, pcd; várias separadas por vírgula; "
+    "SOMENTE pelas perguntas sobre o próprio requerente — É Aposentado?, É Pensionista?, Tipo de Benefício — "
+    "marcadas Sim; NUNCA pelas perguntas sobre cônjuge ou dependente, como \"Cônjuge é aposentado/pensionista/BPC\" "
+    "ou \"Dependente é beneficiário de BPC\"), "
     "beneficio_aposentadoria_numero e beneficio_aposentadoria_centavos (É Aposentado?/Aposentadoria), "
     "beneficio_pensao_numero e beneficio_pensao_centavos (É Pensionista?), "
     "beneficio_bpc_numero e beneficio_bpc_centavos (BPC/LOAS/Amparo), "
@@ -85,6 +87,26 @@ def verification_prompt():
             "texto da opção marcada (\"Sim\", \"Não\", \"Não se aplica\", \"Viúvo\" etc.); para campos, o "
             "conteúdo escrito. " + CHECKBOX + "Devolva um objeto JSON {\"respostas\": {chave: texto ou null}} "
             "só com as chaves das perguntas que aparecem nesta página.\n" + lines)
+
+
+FORM_TITLES = ("requerimento de isencao de iptu", "declaracao de isencao de iptu")
+FORM_QUESTIONS = ("beneficiario reside no imovel", "o imovel possui edicula", "edicula esta habitada",
+                  "e caso de usufrutuario", "possui outras fontes de renda", "quem reside na edicula")
+
+
+def normalized(text):
+    return " ".join(re.findall(r"[a-z0-9]+", _fold(text or "")))
+
+
+def is_form_page(text):
+    """Página do formulário de isenção da Prefeitura, pelo texto (independe da classificação do modelo)."""
+    words = normalized(text)
+    if any(title in words for title in FORM_TITLES):
+        return True
+    if sum(question in words for question in FORM_QUESTIONS) >= 2:
+        return True
+    # Página de continuação: perguntas de cônjuge e atividades.
+    return "conjuge ou companheiro" in words and ("socio de empresa" in words or "trabalha registrado" in words)
 
 
 def _fold(text):
