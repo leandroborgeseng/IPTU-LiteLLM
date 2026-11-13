@@ -16,7 +16,7 @@ services:
         bind:
           create_host_path: false
     tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+      - /tmp:rw,noexec,nosuid,nodev,size=1g,mode=1777
     read_only: true
     cap_drop:
       - ALL

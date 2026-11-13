@@ -519,7 +519,16 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
             if self.command == "POST" and len(parts) == 4:
                 if parts[3] == "parte":
                     start = int(self.headers.get("Upload-Offset", ""))
-                    code, result = batch.append(path, start, self.read_bounded(batch.CHUNK))
+                    began = time.monotonic()
+                    try:
+                        data = self.read_bounded(batch.CHUNK)
+                        code, result = batch.append(path, start, data)
+                    except Exception as error:
+                        print(f"Upload {parts[2][:8]} offset {start}: {type(error).__name__} "
+                              f"após {time.monotonic() - began:.1f} s", flush=True)
+                        raise
+                    print(f"Upload {parts[2][:8]} offset {start}: HTTP {code}, {len(data)} bytes em "
+                          f"{time.monotonic() - began:.1f} s", flush=True)
                     self.send_json(code, result)
                     return
                 if parts[3] == "reanalisar":

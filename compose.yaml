@@ -26,7 +26,7 @@ services:
     volumes:
       - iptu_data:/data
     tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+      - /tmp:rw,noexec,nosuid,nodev,size=1g,mode=1777
     cap_drop:
       - ALL
     security_opt:

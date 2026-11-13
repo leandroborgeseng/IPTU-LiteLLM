@@ -173,23 +173,32 @@ async function buildZip(items, onProgress) {
 /* ---------- Envio retomável ---------- */
 const PART = 4 * 1024 * 1024;       // partes menores: menos retrabalho se a conexão cair
 const PART_TIMEOUT = 180 * 1000;    // tempo máximo por parte
-const RETRIES = 5;
+const STALL = 30 * 1000;            // sem avanço nem resposta por 30 s: cancela e reenvia
+const RETRIES = 6;
 
-function sendPart(id, offset, data, onProgress) {
+function sendPart(id, offset, data, onProgress, onWait) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let last = performance.now();
+    const watch = setInterval(() => {
+      const idle = performance.now() - last;
+      if (idle > 3000) onWait(Math.round(idle / 1000));
+      if (idle > STALL) xhr.abort();
+    }, 1000);
+    const done = (fn, value) => { clearInterval(watch); fn(value); };
     xhr.open('POST', api + '/' + id + '/parte');
     xhr.setRequestHeader('Upload-Offset', String(offset));
     xhr.timeout = PART_TIMEOUT;
-    xhr.upload.onprogress = (event) => onProgress(event.loaded);
+    xhr.upload.onprogress = (event) => { last = performance.now(); onProgress(event.loaded); };
+    xhr.onabort = () => done(reject, new Error('servidor sem resposta por ' + STALL / 1000 + ' s'));
     xhr.onload = () => {
       let body = null;
       try { body = JSON.parse(xhr.responseText); } catch { /* resposta não JSON (proxy) */ }
-      if (xhr.status === 200 && body) resolve(body);
-      else reject(Object.assign(new Error(body?.status || 'HTTP ' + xhr.status), {status: xhr.status}));
+      if (xhr.status === 200 && body) done(resolve, body);
+      else done(reject, Object.assign(new Error(body?.status || 'HTTP ' + xhr.status), {status: xhr.status}));
     };
-    xhr.onerror = () => reject(new Error('conexão interrompida'));
-    xhr.ontimeout = () => reject(new Error('tempo esgotado'));
+    xhr.onerror = () => done(reject, new Error('conexão interrompida'));
+    xhr.ontimeout = () => done(reject, new Error('tempo esgotado'));
     xhr.send(data);
   });
 }
@@ -224,13 +233,18 @@ async function send(blob, name, resumeKey) {
   show(offset);
   while (offset < blob.size) {
     try {
-      const result = await sendPart(lot.id, offset, blob.slice(offset, offset + PART), (loaded) => show(offset + loaded));
+      const result = await sendPart(lot.id, offset, blob.slice(offset, offset + PART), (loaded) => show(offset + loaded),
+        (seconds) => step('enviar', 'Enviando ' + mb(offset) + ' de ' + mb(blob.size) + ' · aguardando resposta do servidor há '
+          + seconds + ' s' + (failures ? ' · tentativa ' + (failures + 1) + ' de ' + (RETRIES + 1) : '')));
       offset = result.recebido;
       failures = 0;
       show(offset);
     } catch (error) {
       failures += 1;
-      if (failures > RETRIES) throw new Error(error.message + ' após ' + RETRIES + ' tentativas');
+      if (failures > RETRIES) {
+        throw new Error(error.message + ' (parte em ' + mb(offset) + ', ' + RETRIES + ' novas tentativas). '
+          + 'Verifique a conexão e os logs do servidor');
+      }
       step('enviar', 'Falha no envio (' + error.message + '). Tentando de novo em ' + 2 * failures + ' s…');
       await new Promise((resolve) => setTimeout(resolve, 2000 * failures));
       // O servidor informa até onde recebeu; retoma desse ponto (cobre a parte que chegou sem resposta).
