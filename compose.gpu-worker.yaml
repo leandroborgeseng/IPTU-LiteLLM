@@ -7,6 +7,7 @@ services:
       LITELLM_API_KEY: ${LITELLM_API_KEY:?Configure a chave}
       IPTU_BATCH_MODEL: ${IPTU_BATCH_MODEL:-qwen3.8-27b-fast}
       IPTU_BATCH_MODEL_FALLBACK: ${IPTU_BATCH_MODEL_FALLBACK:-}
+      IPTU_VERIFY_MODEL: ${IPTU_VERIFY_MODEL:-}
       IPTU_PAGE_WORKERS: ${IPTU_PAGE_WORKERS:-16}
     volumes:
       - type: bind

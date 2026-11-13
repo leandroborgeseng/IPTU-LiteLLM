@@ -35,6 +35,28 @@ apenas no ambiente (Coolify), nunca no repositório. Teste com
 `python app.py sil` no terminal do container. O resultado da consulta fica
 em cache por processo por 24 h.
 
+### Como a leitura funciona
+
+1. Cada página: classificação do documento e transcrição (imagem 1800 px, cinza).
+2. Requerimento, extrato e documento de identidade: segunda leitura com
+   instruções específicas do documento sobre imagem de 2600 px colorida.
+3. Requerimento: leitura independente em perguntas e respostas
+   (`IPTU_VERIFY_MODEL`, ou o modelo reserva, ou o principal). Campo decisivo
+   lido de forma diferente não é usado: vira pendência com a página.
+4. O parecer cruza os documentos e redige o texto; a tabela mostra uma
+   síntese de uma linha por processo.
+
+Custo: 1 chamada por página comum, 2 por extrato/identidade e 3 por página
+de requerimento.
+
+### Medir a assertividade
+
+Monte um gabarito JSON (formato em `avaliacao.py`) com o resultado conferido
+por servidor para alguns processos, processe o mesmo lote e clique em
+**Comparar com gabarito** (ou `python app.py avaliar <lote> <gabarito.json>`).
+O relatório mostra acerto do resultado, da renda e de cada campo lido. Use-o
+para escolher o modelo e para achar novos padrões de documento.
+
 ### Modelo
 
 `IPTU_BATCH_MODEL` define o modelo multimodal. `IPTU_BATCH_MODEL_FALLBACK`

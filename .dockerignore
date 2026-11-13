@@ -1,7 +1,9 @@
 *
 !app.py
+!avaliacao.py
 !batch.py
 !parecer.py
+!leitura.py
 !sil.py
 !lotes.html
 !lotes.js

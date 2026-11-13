@@ -123,8 +123,14 @@ def assess(process, review, cadastro=None):
     review = review or {}
     confirmed = review.get("confirmacoes", {})
     facts = {}
+    doubtful = []  # campos decisivos lidos de forma diferente nas duas leituras do requerimento
     for row in forms:
+        skip = set(row.get("divergencias") or [])
+        for field in sorted(skip):
+            doubtful.append(evidence(row, field))
         for field, value in row.get("obtido", {}).items():
+            if field in skip:
+                continue
             if value is not None and value != "":
                 facts.setdefault(field, []).append(evidence(row, value))
 
@@ -485,6 +491,11 @@ def assess(process, review, cadastro=None):
     ):
         add("leitura", "pendente", "Há arquivos ou páginas que não puderam ser lidos.")
 
+    if doubtful:
+        add("dupla_leitura", "pendente", "Leituras divergentes no requerimento: "
+            + "; ".join(f"{CAMPOS.get(item['valor'], item['valor'])} (p. {item['pagina']})" for item in doubtful)
+            + ". Confira na página e registre a conferência.", doubtful)
+
     out_of_flow = None
     if not forms:
         rules[:] = [row for row in rules if row["criterio"] in {"processamento", "processo_sei", "leitura"}]
@@ -521,6 +532,7 @@ def assess(process, review, cadastro=None):
             "renda_calculada_comprovantes_centavos": estimate["total_centavos"] if estimate else None,
             "teto_centavos": TETO_CENTAVOS if exercise == EXERCICIO else None,
             "fontes": {"criterios": FONTE_CRITERIOS, "teto": FONTE_TETO}}
+    report["resumo"]["sintese"] = synthesis(facts, unique, flag, modality, total, result)
     report["parecer_texto"] = write_opinion(report)
     return report
 
@@ -603,12 +615,53 @@ def income_estimate(income):
             "competencia": latest, "comprovantes": used}
 
 
+CAMPOS = {
+    "estado_civil": "estado civil", "beneficio_aposentadoria_numero": "nº do benefício de aposentadoria",
+    "beneficio_aposentadoria_centavos": "valor da aposentadoria", "beneficio_pensao_numero": "nº da pensão",
+    "beneficio_pensao_centavos": "valor da pensão", "outras_rendas": "outras fontes de renda",
+    "reside_no_imovel": "reside no imóvel", "imovel_ponto_comercial": "ponto comercial",
+    "possui_edicula": "possui edícula", "edicula_alugada": "edícula alugada",
+    "edicula_ocupante_familiar": "quem reside na edícula", "possui_outro_imovel": "possui outro imóvel",
+    "trabalha_registrado": "trabalha registrado",
+}
+
+
+def synthesis(facts, unique, flag, modality, total, result):
+    """Uma linha com o essencial do caso, como na análise humana."""
+    if result == "fora_do_fluxo":
+        return "Processo fora do fluxo de isenção para aposentado/pensionista."
+    parts = []
+    marital = fold(unique("estado_civil"))
+    for prefix, label in (("solteir", "solteiro(a)"), ("casad", "casado(a)"), ("uniao", "em união estável"),
+                          ("divorc", "divorciado(a)"), ("separad", "separado(a)"), ("viuv", "viúvo(a)")):
+        if marital.startswith(prefix):
+            parts.append(label)
+    if modality:
+        parts.append(modality_label(modality))
+    if total is not None:
+        parts.append(money(total) + (" (no limite)" if total == TETO_CENTAVOS else ""))
+    has, family = flag("possui_edicula"), flag("edicula_ocupante_familiar")
+    if has is False:
+        parts.append("sem edícula")
+    elif has and flag("edicula_alugada"):
+        parts.append("edícula alugada")
+    elif has and family:
+        parts.append("edícula com familiar")
+    elif has:
+        parts.append("com edícula")
+    if flag("usufrutuario"):
+        parts.append("usufrutuário(a)")
+    text = ", ".join(parts)
+    return text[:1].upper() + text[1:] if text else ""
+
+
 ROTULOS = {
     "modalidade": "Modalidade", "identidade": "Identificação do requerente", "beneficio": "Benefício",
     "renda": "Renda bruta familiar", "residencia": "Residência no imóvel", "edícula": "Edícula e uso",
     "imovel": "Vínculo com o imóvel", "mobiliario": "Atividade econômica", "unicidade": "Imóvel único", "prazo": "Protocolo e prazo",
     "exercicio": "Exercício", "processo_sei": "Processo SEI", "leitura": "Leitura dos documentos",
     "processamento": "Processamento", "requerimento": "Requerimento",
+    "dupla_leitura": "Dupla leitura do requerimento",
 }
 
 

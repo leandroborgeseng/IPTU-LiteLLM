@@ -14,6 +14,7 @@ const LABEL = {
   modalidade: 'Modalidade', identidade: 'Identificação', beneficio: 'Benefício', renda: 'Renda familiar',
   residencia: 'Residência', 'edícula': 'Edícula e uso', imovel: 'Vínculo com o imóvel', unicidade: 'Imóvel único',
   mobiliario: 'Atividade econômica', prazo: 'Protocolo e prazo', exercicio: 'Exercício',
+  dupla_leitura: 'Dupla leitura do requerimento',
   processo_sei: 'Processo SEI', leitura: 'Leitura', processamento: 'Processamento', requerimento: 'Requerimento',
 };
 let currentBatch = '';
@@ -287,6 +288,7 @@ async function refreshBatch() {
     step('pronto', rows.length + ' processo(s) analisado(s).', 1);
   }
   $('reanalisar').hidden = !['concluido', 'falha'].includes(lot.status);
+  $('avaliar').hidden = lot.status !== 'concluido';
   $('csv').hidden = !rows.length;
   const tally = {};
   for (const row of rows) tally[row.resultado] = (tally[row.resultado] || 0) + 1;
@@ -302,7 +304,8 @@ async function refreshBatch() {
     el('td', {}, row.requerente || '—', row.cpf ? el('div', {class: 'why'}, row.cpf) : null),
     el('td', {}, el('span', {class: 'badge r-' + row.resultado}, RESULT[row.resultado] || row.resultado),
       row.renda_familiar_centavos != null ? el('div', {class: 'why'}, 'Renda ' + money(row.renda_familiar_centavos)) : null),
-    el('td', {class: 'why'}, (row.motivos || [])[0] || ''))));
+    el('td', {class: 'why'}, row.sintese ? el('div', {}, row.sintese) : null,
+      ['enquadra', 'enquadra_conferir_cadastro'].includes(row.resultado) ? null : (row.motivos || [])[0] || ''))));
 }
 
 $('batches').onchange = () => { $('job').classList.remove('on'); if ($('batches').value) selectBatch($('batches').value); };
@@ -353,7 +356,8 @@ async function openProcess(id) {
   const report = detail.parecer;
   $('detail').classList.add('on');
   $('d-title').textContent = report.resumo.requerente || detail.processo;
-  $('d-sub').textContent = (detail.numero_processo_sei || detail.processo) +
+  $('d-sub').textContent = (report.resumo.sintese ? report.resumo.sintese + ' · ' : '') +
+    (detail.numero_processo_sei || detail.processo) +
     (report.resumo.inscricao_imobiliaria ? ' · inscrição ' + report.resumo.inscricao_imobiliaria : '');
   const result = detail.status === 'em_revisao' ? report.resultado : 'processando';
   $('d-badge').className = 'badge r-' + result;
@@ -415,3 +419,34 @@ $('notes').onsubmit = async (event) => {
 
 refreshBatches().catch((error) => { $('footer-status').textContent = 'Falha: ' + error.message; });
 setInterval(() => { if (!uploading) refreshBatch().catch(() => {}); }, 4000);
+
+/* ---------- Comparação com gabarito ---------- */
+$('avaliar').onclick = () => $('gabarito').click();
+$('gabarito').onchange = async (event) => {
+  const file = event.target.files[0];
+  event.target.value = '';
+  if (!file) return;
+  try {
+    const report = await request(api + '/' + currentBatch + '/avaliar', {method: 'POST', body: await file.text()});
+    const r = report.resumo;
+    const pct = (value) => value == null ? '—' : value.toLocaleString('pt-BR') + '%';
+    $('eval-body').replaceChildren(
+      el('p', {}, 'Resultado correto em ' + r.resultado_ok + ' de ' + r.processos + ' processos (' + pct(r.acerto_resultado_pct) +
+        ') · renda ' + pct(r.acerto_renda_pct) + ' · campos ' + pct(r.acerto_campos_pct) + '.'),
+      el('table', {}, el('thead', {}, el('tr', {}, ...['Processo', 'Esperado', 'Obtido', 'Divergências'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...report.processos.map((row) => el('tr', {},
+          el('td', {}, row.processo),
+          el('td', {}, RESULT[row.esperado] || row.esperado || ''),
+          el('td', {}, el('span', {class: 'badge r-' + (row.obtido === row.esperado ? 'enquadra' : 'nao_enquadra')},
+            RESULT[row.obtido] || row.obtido)),
+          el('td', {class: 'why'}, [
+            row.renda_esperada != null && row.renda_esperada !== row.renda_obtida
+              ? 'renda ' + money(row.renda_obtida) + ' (esperado ' + money(row.renda_esperada) + ')' : '',
+            ...(row.campos_divergentes || []).map((c) => c.campo + ': ' + c.obtido + ' (esperado ' + c.esperado + ')'),
+            row.obtido !== row.esperado ? row.motivo : '',
+          ].filter(Boolean).join(' · ')))))));
+    $('eval-box').showModal();
+  } catch (error) {
+    alert('Gabarito inválido: ' + error.message);
+  }
+};

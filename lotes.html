@@ -120,18 +120,24 @@ footer button { font-size: .8rem; }
       <div><a id="csv" hidden>Exportar planilha (CSV)</a></div>
     </div>
     <table>
-      <thead><tr><th>Processo</th><th>Requerente</th><th>Resultado</th><th>Motivo principal</th></tr></thead>
+      <thead><tr><th>Processo</th><th>Requerente</th><th>Resultado</th><th>Síntese / motivo</th></tr></thead>
       <tbody id="rows"><tr><td class="empty" colspan="4">Selecione uma pasta para começar.</td></tr></tbody>
     </table>
   </section>
 
   <footer>
     <button id="reanalisar" type="button" hidden>Reanalisar lote</button>
+    <button id="avaliar" type="button" hidden>Comparar com gabarito</button>
+    <input id="gabarito" type="file" accept=".json,application/json" hidden>
     <button id="limpar" type="button">Apagar todos os lotes</button>
     <span id="footer-status"></span>
   </footer>
 </main>
 
+<dialog id="eval-box" style="max-width:min(900px,95vw);border:1px solid var(--line);border-radius:.8rem">
+  <h3 style="margin-top:0">Assertividade do lote</h3><div id="eval-body"></div>
+  <form method="dialog"><button>Fechar</button></form>
+</dialog>
 <div id="detail" role="dialog" aria-modal="true" aria-labelledby="d-title">
   <div id="panel">
     <header>

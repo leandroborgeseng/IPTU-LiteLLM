@@ -58,7 +58,7 @@ ASSESSMENT_FIELDS = {
 INCOME_FIELDS = {"renda_bruta_centavos", "competencia_renda", "titular_renda",
                  "numero_beneficio", "especie_beneficio"}
 ID_FIELDS = {"nome_documento", "cpf_documento", "filiacao_documento"}
-PAGE_SCHEMA = 7
+PAGE_SCHEMA = 8
 
 
 class ResetRequested(Exception):
@@ -301,7 +301,7 @@ def inventory(path, name):
     return list(processes.values())
 
 
-def render_page(pdf, number, extension=".pdf"):
+def render_page(pdf, number, extension=".pdf", size=1800, gray=True):
     if extension in IMAGE_FORMATS:
         if number != 1:
             return None
@@ -309,7 +309,7 @@ def render_page(pdf, number, extension=".pdf"):
             with Image.open(pdf, formats=[IMAGE_FORMATS[extension]]) as photo:
                 if photo.width * photo.height > 50_000_000:
                     return None
-                photo.thumbnail((1800, 1800))
+                photo.thumbnail((size, size))
                 normalized = ImageOps.exif_transpose(photo).convert("RGBA")
                 page = Image.new("RGB", normalized.size, "white")
                 page.paste(normalized, mask=normalized.getchannel("A"))
@@ -322,7 +322,7 @@ def render_page(pdf, number, extension=".pdf"):
         png = Path(tmp) / "pagina.png"
         completed = subprocess.run(
             ["pdftoppm", "-f", str(number), "-l", str(number), "-singlefile",
-             "-scale-to", "1800", "-gray", "-png", str(pdf), str(png.with_suffix(""))],
+             "-scale-to", str(size), *(["-gray"] if gray else []), "-png", str(pdf), str(png.with_suffix(""))],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
         )
         if completed.returncode or not png.exists():
@@ -434,12 +434,14 @@ def process_page(pdf, number, evidence, analyze, extension=".pdf"):
             stage = "litellm_ms"
             started = time.monotonic()
             attempts += 1
-            result = analyze(image, texts)
+            # Alta resolução colorida só é gerada se a página precisar de leitura detalhada.
+            hires = lambda: render_page(pdf, number, extension, size=2600, gray=False)  # noqa: E731
+            result = analyze(image, texts, hires=hires)
             if result["status"] == "falha_de_conexao" or result.get("codigo") in {429, 502, 503, 504}:
                 time.sleep(1)
                 check_reset()
                 attempts += 1
-                result = analyze(image, texts)
+                result = analyze(image, texts, hires=hires)
     except (OSError, subprocess.TimeoutExpired):
         pass
     timing[stage] = round((time.monotonic() - started) * 1000)
@@ -703,7 +705,7 @@ def batch_summary(path):
                 continue
             summary = report["resumo"]
             row.update(sei=report["numero_processo_sei"], resultado=report["resultado"],
-                       requerente=summary["requerente"], cpf=summary["cpf"],
+                       requerente=summary["requerente"], cpf=summary["cpf"], sintese=summary.get("sintese"),
                        inscricao=summary["inscricao_imobiliaria"], modalidade=summary["modalidade"],
                        renda_familiar_centavos=summary["renda_familiar_centavos"],
                        motivos=report["motivos_indeferimento"] or report["pendencias"]
