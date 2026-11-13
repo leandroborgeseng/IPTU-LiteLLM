@@ -98,3 +98,43 @@ class DetailPage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(app is None, "dependência ausente")
+class RespostaTolerante(unittest.TestCase):
+    def test_um_campo_fora_do_formato_nao_derruba_a_pagina(self):
+        import batch
+        fields = {"tipo": str, "evidencia_tipo": str, "texto_ocr": str, **batch.FIELDS, **batch.ASSESSMENT_FIELDS}
+        messy = {
+            "tipo": "requerimento", "texto_ocr": "REQUERIMENTO DE ISENÇÃO DE IPTU 2027", "evidencia_tipo": "REQUERIMENTO",
+            "exercicio": "2027", "reside_no_imovel": "Sim", "nome_requerente": "ROZELI DE OLIVEIRA",
+            "beneficio_aposentadoria_numero": 1871219237,          # número em vez de texto
+            "beneficio_aposentadoria_centavos": "1.621,00",        # reais como texto
+            "beneficio_pensao_centavos": 1621.0,                   # reais como número
+            "conjuge_renda_centavos": 2894.36,                     # reais com decimais
+            "outras_rendas": "Não", "possui_edicula": "não se aplica",
+            "edicula_alugada": [1, 2],                             # lixo
+            "observacao": "campo inventado",                       # chave desconhecida
+        }
+        clean, dropped = app.coerce_fields(messy, fields)
+        self.assertEqual(clean["tipo"], "requerimento")
+        self.assertEqual(clean["exercicio"], 2027)
+        self.assertIs(clean["reside_no_imovel"], True)
+        self.assertEqual(clean["beneficio_aposentadoria_numero"], "1871219237")
+        self.assertEqual(clean["beneficio_aposentadoria_centavos"], 162100)
+        self.assertEqual(clean["beneficio_pensao_centavos"], 162100)
+        self.assertEqual(clean["conjuge_renda_centavos"], 289436)
+        self.assertIs(clean["outras_rendas"], False)
+        self.assertIsNone(clean["possui_edicula"])
+        self.assertIsNone(clean["edicula_alugada"])
+        self.assertEqual(dropped, ["edicula_alugada", "observacao"])
+
+    def test_tipo_desconhecido_vira_outro(self):
+        import batch
+        clean, _ = app.coerce_fields({"tipo": "carta", "texto_ocr": None}, {"tipo": str, "texto_ocr": str, **batch.FIELDS})
+        self.assertEqual((clean["tipo"], clean["texto_ocr"]), ("outro", ""))
+
+    def test_centavos_ja_corretos_nao_mudam(self):
+        self.assertEqual(app.coerce_value("renda_bruta_centavos", 162100, int), (162100, True))
+        self.assertEqual(app.coerce_value("renda_bruta_centavos", "162100", int), (162100, True))
+        self.assertEqual(app.coerce_value("exercicio", 2027.0, int), (2027, True))

@@ -489,7 +489,18 @@ def assess(process, review, cadastro=None):
     if any(row["status"] != "extraido" or row.get("status_ocr") == "falha_ocr" for row in pages) or any(
         doc["erro"] and doc["erro"] != "formato_nao_processado" for doc in process["arquivos"]
     ):
-        add("leitura", "pendente", "Há arquivos ou páginas que não puderam ser lidos.")
+        failures = {}
+        for row in pages:
+            if row["status"] != "extraido" or row.get("status_ocr") == "falha_ocr":
+                reason = row["status"] if row["status"] != "extraido" else "falha_ocr"
+                failures[reason] = failures.get(reason, 0) + 1
+        for doc in process["arquivos"]:
+            if doc["erro"] and doc["erro"] != "formato_nao_processado":
+                failures[doc["erro"]] = failures.get(doc["erro"], 0) + 1
+        add("leitura", "pendente", "Há arquivos ou páginas que não puderam ser lidos: "
+            + ", ".join(f"{count} com {reason}" for reason, count in sorted(failures.items())) + ".",
+            [evidence(row, row["status"]) for row in pages
+             if row["status"] != "extraido" or row.get("status_ocr") == "falha_ocr"][:20])
 
     if doubtful:
         add("dupla_leitura", "pendente", "Leituras divergentes no requerimento: "

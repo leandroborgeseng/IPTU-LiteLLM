@@ -128,6 +128,80 @@ def check_vision(model, case):
     return result
 
 
+MONEY_IN_REAIS_GUARD = {"renda_bruta_centavos", "beneficio_aposentadoria_centavos", "beneficio_pensao_centavos",
+                        "beneficio_bpc_centavos", "conjuge_renda_centavos"}
+
+
+def coerce_value(key, field, kind):
+    """Converte um valor do modelo para o tipo esperado; retorna (valor, ok)."""
+    if field is None or field == "":
+        return None, True
+    if kind is str:
+        if isinstance(field, bool):
+            return None, False
+        if isinstance(field, (int, float)):
+            return (str(int(field)) if float(field).is_integer() else str(field)), True
+        return (field.strip(), True) if isinstance(field, str) else (None, False)
+    if kind is bool:
+        if isinstance(field, bool):
+            return field, True
+        if isinstance(field, str):
+            text = field.strip().lower()
+            if text in {"sim", "s", "true", "verdadeiro", "yes", "x"}:
+                return True, True
+            if text in {"não", "nao", "n", "false", "falso", "no"}:
+                return False, True
+            if text in {"não se aplica", "nao se aplica", "null", "n/a"}:
+                return None, True
+        return None, False
+    if kind is int:
+        if isinstance(field, bool):
+            return None, False
+        if isinstance(field, str):
+            text = re.sub(r"[^0-9,.]", "", field)
+            if not text:
+                return None, False
+            if "," in text:  # formato brasileiro: 1.621,00
+                integer, _, decimals = text.rpartition(",")
+                number = int(integer.replace(".", "") or 0) + int(decimals.ljust(2, "0")[:2]) / 100
+            elif re.search(r"\.\d{1,2}$", text):  # 1621.00
+                number = float(text)
+            else:
+                number = int(text.replace(".", ""))
+            field = number
+        if isinstance(field, float):
+            if key.endswith("_centavos") and not field.is_integer():
+                field = round(field * 100)  # veio em reais com decimais
+            else:
+                field = int(round(field))
+        if not isinstance(field, int):
+            return None, False
+        if key in MONEY_IN_REAIS_GUARD and 100 <= field < 20000:
+            field *= 100  # benefício mensal abaixo de R$ 200 é implausível: veio em reais
+        return field, True
+    return None, False
+
+
+def coerce_fields(value, fields):
+    """Mantém os campos conhecidos convertidos; devolve (campos, nomes descartados)."""
+    clean, dropped = {}, []
+    for key, kind in fields.items():
+        if key in {"tipo", "texto_ocr", "evidencia_tipo"}:
+            continue
+        converted, ok = coerce_value(key, value.get(key), kind)
+        clean[key] = converted
+        if not ok:
+            dropped.append(key)
+    kind = value.get("tipo")
+    clean["tipo"] = kind if kind in batch.KINDS else "outro"
+    text = value.get("texto_ocr")
+    clean["texto_ocr"] = text if isinstance(text, str) else ""
+    quote = value.get("evidencia_tipo")
+    clean["evidencia_tipo"] = quote if isinstance(quote, str) else None
+    dropped += [key for key in value if key not in fields]
+    return clean, sorted(dropped)
+
+
 def ask_json(model, prompt, png, max_tokens=2048, timeout=60):
     """Uma chamada multimodal que deve devolver um objeto JSON. Retorna (status, objeto|None)."""
     body = {"model": model, "stream": False, "temperature": 0, "max_tokens": max_tokens,
@@ -159,9 +233,8 @@ def clean_fields(value, allowed):
     for key, field in value.items():
         if key not in allowed or field is None:
             continue
-        if types[key] is int and isinstance(field, float) and field.is_integer():
-            field = int(field)
-        if type(field) is not types[key]:
+        field, ok = coerce_value(key, field, types[key])
+        if not ok or field is None:
             continue
         if key.startswith("cpf_"):
             number = re.sub(r"\D", "", field)
@@ -313,11 +386,19 @@ def extract_form_page(model, png, *, show_preview=False, inventory=False, texts=
     except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         result["status"] = "json_invalido"
         return result
-    if (
+    if inventory:
+        # Leitura de lote: tolerante. Um campo fora do formato é convertido ou descartado,
+        # sem perder a página inteira (classificação, texto e demais campos).
+        if not isinstance(value, dict):
+            result["status"] = "esquema_invalido"
+            return result
+        value, dropped = coerce_fields(value, fields)
+        if dropped:
+            result["campos_descartados"] = dropped
+    elif (
         not isinstance(value, dict) or not value.keys() <= fields.keys()
-        or not ({"tipo", "texto_ocr", *batch.FIELDS} if inventory else set(fields)) <= value.keys()
+        or not set(fields) <= value.keys()
         or any(v is not None and type(v) is not fields[k] for k, v in value.items())
-        or (inventory and (value["tipo"] not in batch.KINDS or type(value["texto_ocr"]) is not str))
     ):
         result["status"] = "esquema_invalido"
         return result
