@@ -975,6 +975,11 @@ def diagnostics(path):
             report["divergencias"] += len(row.get("divergencias") or [])
             report["campos_descartados"] += len(row.get("campos_descartados") or [])
             report["novas_tentativas"] += max(0, (row.get("tentativas_ia") or 1) - 1)
+            tokens = row.get("tokens") or {}
+            if tokens.get("chamadas"):
+                report.setdefault("tokens", {"entrada": 0, "saida": 0, "chamadas": 0})
+                for key in ("entrada", "saida", "chamadas"):
+                    report["tokens"][key] += tokens.get(key) or 0
             for stage, ms in (row.get("tempos_ms") or {}).items():
                 total, count = sums.get(stage, (0, 0))
                 sums[stage] = (total + ms, count + 1)
@@ -983,6 +988,10 @@ def diagnostics(path):
                 report["exemplos_de_falha"].append({"processo": process["processo"], "arquivo": origin.get(key, key),
                                                     "pagina": int(number), "situacao": status})
     report["tempo_medio_ms"] = {stage: round(total / count) for stage, (total, count) in sums.items() if count}
+    if report.get("tokens", {}).get("chamadas"):
+        calls = report["tokens"]["chamadas"]
+        report["tokens"]["saida_por_chamada"] = round(report["tokens"]["saida"] / calls)
+        report["tokens"]["entrada_por_chamada"] = round(report["tokens"]["entrada"] / calls)
     state = load(path / "batch.json")
     report["lote"] = {key: state.get(key) for key in ("status", "progresso", "desempenho")}
     report["configuracao"] = {"paginas_em_paralelo": page_workers(), "renderizacao_em_paralelo": RENDER_SLOTS._initial_value,

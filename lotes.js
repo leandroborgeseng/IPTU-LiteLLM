@@ -530,7 +530,8 @@ async function refreshDashboard() {
   $('k-revisao-sub').textContent = [pct(d.revisao_manual), d.fora_do_fluxo ? number(d.fora_do_fluxo) + ' fora do fluxo' : '']
     .filter(Boolean).join(' · ');
   $('k-tempo').textContent = seconds(d.tempo_medio_ms);
-  $('k-tempo-sub').textContent = d.ritmo_processos_hora ? 'ritmo: ' + number(d.ritmo_processos_hora) + ' processos/hora' : 'leitura de todas as páginas';
+  $('k-tempo-sub').textContent = 'soma das páginas lidas em paralelo' + (d.ritmo_processos_hora
+    ? ' · ritmo real: ' + number(d.ritmo_processos_hora) + ' processos/hora' : '');
   drawVolume(d.envios || []);
   drawTime(d.envios || []);
 }
@@ -946,6 +947,8 @@ async function showDiagnostics(id) {
       el('li', {}, value + ' · ' + (labels[key] || key))));
     const c = d.configuracao;
     $('eval-body').replaceChildren(
+      d.tokens ? el('p', {class: 'small muted'}, 'IA: ' + number(d.tokens.chamadas) + ' chamadas registradas · média de '
+        + number(d.tokens.entrada_por_chamada) + ' tokens lidos e ' + number(d.tokens.saida_por_chamada) + ' gerados por chamada') : null,
       el('p', {}, d.paginas + ' páginas · ' + d.novas_tentativas + ' novas tentativas · ' + d.divergencias +
         ' divergências na dupla leitura · ' + d.campos_descartados + ' campos descartados'),
       el('strong', {}, 'Páginas por situação'), list(Object.entries(d.por_situacao).sort((a, b) => b[1] - a[1]), SITUACAO),
@@ -972,13 +975,17 @@ async function showCapacity(state) {
   $('eval-body').replaceChildren(...[
     el('p', {class: 'small muted'}, 'Mede a 1ª leitura com uma página real (' + (state.amostra || '…') + ') no modelo ' + (state.modelo || '')
       + '. Rode com o servidor de IA livre: lotes em leitura ao mesmo tempo diminuem o resultado.'),
-    el('table', {}, el('thead', {}, el('tr', {}, ...['Simultâneas', 'Páginas/min', 'Tempo médio', 'Pior caso (p95)', 'Erros'].map((h) => el('th', {}, h)))),
+    el('table', {}, el('thead', {}, el('tr', {}, ...['Simultâneas', 'Páginas/min', 'Tempo médio', 'Pior caso (p95)', 'Tokens gerados', 'Erros'].map((h) => el('th', {}, h)))),
       el('tbody', {}, ...rows.map((row) => el('tr', {}, el('td', {}, number(row.simultaneas)), el('td', {}, number(row.paginas_por_minuto)),
         el('td', {}, row.tempo_medio_s != null ? row.tempo_medio_s.toLocaleString('pt-BR') + ' s' : '—'),
         el('td', {}, row.tempo_p95_s != null ? row.tempo_p95_s.toLocaleString('pt-BR') + ' s' : '—'),
+        el('td', {}, row.tokens_saida_medio != null ? number(row.tokens_saida_medio) : '—'),
         el('td', {}, Object.entries(row.erros || {}).map(([k, v]) => v + ' ' + k).join(', ') || '0'))))),
     state.status === 'executando' ? el('p', {}, 'Medindo com ' + (state.nivel_atual || '…') + ' chamadas simultâneas…') : null,
     state.status === 'falha' ? el('p', {}, 'Falha no teste: ' + state.motivo) : null,
+    rows.some((row) => row.tokens_saida_medio > 250) ? el('p', {class: 'small'}, '⚠ A classificação deveria gerar menos de '
+      + '150 tokens. Valores bem maiores indicam que o modelo está "raciocinando" antes de responder: desligar esse modo no '
+      + 'servidor de IA (ou usar um modelo sem raciocínio) reduz bastante o tempo de cada página.') : null,
     state.status === 'concluido' ? el('p', {}, rec
       ? 'Recomendação: IPTU_PAGE_WORKERS=' + rec.IPTU_PAGE_WORKERS + ' (' + number(rec.paginas_por_minuto)
         + ' páginas/min; ' + minutes(rec.paginas_por_minuto) + ' para a 1ª leitura de um lote de 2.535 páginas).'
@@ -991,7 +998,7 @@ async function showCapacity(state) {
   }, 2000);
 }
 $('capacity').onclick = async () => {
-  if (!confirm('O teste envia 240 chamadas ao servidor de IA (8 a 64 simultâneas) e leva alguns minutos. '
+  if (!confirm('O teste envia até 688 chamadas ao servidor de IA (8 a 128 simultâneas) e leva alguns minutos. '
     + 'Lotes em leitura vão disputar o servidor. Continuar?')) return;
   try {
     const response = await fetch('/api/capacidade', {method: 'POST'});

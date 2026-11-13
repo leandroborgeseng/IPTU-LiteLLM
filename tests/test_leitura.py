@@ -260,3 +260,55 @@ class NomesCitadosNaEscritura(unittest.TestCase):
         motivo = criteria(parecer.assess(process, None))["imovel"]["motivo"]
         self.assertIn("cita o requerente", motivo)
         self.assertIn("indica usufruto", motivo)
+
+
+@unittest.skipIf(app is None, "dependência ausente")
+class RespostaCortada(unittest.TestCase):
+    def setUp(self):
+        self.original = (app.gateway_request, app.time.sleep)
+        app.time.sleep = lambda seconds: None
+
+    def tearDown(self):
+        app.gateway_request, app.time.sleep = self.original
+
+    def test_repete_com_limite_maior(self):
+        sizes = []
+        def fake(path, body=None, timeout=5):
+            sizes.append(body["max_tokens"])
+            if len(sizes) == 1:
+                return {"status": "conectado"}, {"choices": [{"finish_reason": "length", "message": {"content": "{"}}]}
+            return {"status": "conectado"}, {"choices": [{"finish_reason": "stop", "message": {
+                "content": '{"tipo": "outro", "evidencia_tipo": "x", "texto_ocr": "x"}'}}]}
+        app.gateway_request = fake
+        result = app.extract_form_page("m", b"\\xff\\xd8\\xffimg", inventory=True)
+        self.assertEqual((result["status"], sizes), ("extraido", [700, 2800]))
+
+    def test_leitura_detalhada_dobra_o_limite(self):
+        sizes = []
+        def fake(path, body=None, timeout=5):
+            sizes.append(body["max_tokens"])
+            reason = "length" if len(sizes) == 1 else "stop"
+            return {"status": "conectado"}, {"choices": [{"finish_reason": reason, "message": {"content": '{"a": 1}'}}]}
+        app.gateway_request = fake
+        self.assertEqual(app.ask_json("m", "p", b"img", 4096), ("extraido", {"a": 1}))
+        self.assertEqual(sizes, [4096, 8192])
+
+
+@unittest.skipIf(app is None, "dependência ausente")
+class Tokens(unittest.TestCase):
+    def setUp(self):
+        self.original = app.gateway_request
+
+    def tearDown(self):
+        app.gateway_request = self.original
+        app.TOKENS.totais = None
+
+    def test_soma_tokens_da_pagina(self):
+        app.gateway_request = lambda path, body=None, timeout=5: ({"status": "conectado"}, {
+            "usage": {"prompt_tokens": 1500, "completion_tokens": 60},
+            "choices": [{"finish_reason": "stop", "message": {"content": '{"tipo": "outro", "texto_ocr": ""}'}}]})
+        app.TOKENS.totais = {"entrada": 0, "saida": 0, "chamadas": 0}
+        result = app.extract_form_page("m", b"\xff\xd8\xffimg", inventory=True)
+        app.extract_form_page("m", b"\xff\xd8\xffimg", inventory=True)
+        self.assertEqual(result["tokens"], {"entrada": 1500, "saida": 60})
+        self.assertEqual(app.TOKENS.totais, {"entrada": 3000, "saida": 120, "chamadas": 2})

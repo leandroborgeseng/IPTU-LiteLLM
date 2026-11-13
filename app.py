@@ -109,12 +109,25 @@ TRANSIENT = {429, 500, 502, 503, 504}
 
 
 FAST_TIMEOUT = int(os.environ.get("IPTU_LLM_TIMEOUT_RAPIDO", "60") or 60)
+TOKENS = __import__("threading").local()  # tokens das chamadas feitas por esta thread (uma página por vez)
+
+
+def note_tokens(usage):
+    totals = getattr(TOKENS, "totais", None)
+    if totals is not None:
+        totals["entrada"] += usage.get("prompt_tokens") or 0
+        totals["saida"] += usage.get("completion_tokens") or 0
+        totals["chamadas"] += 1
 
 
 def llm_call(body, timeout=None, waits=(2, 5, 15)):
     """Chamada ao LiteLLM com novas tentativas e espera crescente em falhas transitórias."""
     for attempt in range(len(waits) + 1):
         result, payload = gateway_request("/chat/completions", body, timeout=timeout or LLM_TIMEOUT)
+        usage = (payload or {}).get("usage") if isinstance(payload, dict) else None
+        if isinstance(usage, dict):
+            note_tokens(usage)
+            result["tokens"] = {"entrada": usage.get("prompt_tokens"), "saida": usage.get("completion_tokens")}
         transient = result["status"] == "falha_de_conexao" or result.get("codigo") in TRANSIENT
         if not transient or attempt == len(waits):
             result["tentativas_llm"] = attempt + 1
@@ -252,6 +265,8 @@ def ask_json(model, prompt, png, max_tokens=4096, timeout=None, waits=(2, 5, 15)
     try:
         choice = payload["choices"][0]
         if choice.get("finish_reason") == "length":
+            if max_tokens < 8192:  # o modelo ainda não terminou: repete uma vez com o dobro do limite
+                return ask_json(model, prompt, png, min(8192, max_tokens * 2), timeout, waits)
             return "resposta_truncada", None
         content = strip_reasoning(choice["message"]["content"] or "")
         fenced = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", content, re.DOTALL | re.IGNORECASE)
@@ -360,15 +375,19 @@ def run_capacity(model, levels):
             def one():
                 started = time.monotonic()
                 result = extract_form_page(model, image, inventory=True, timeout=LLM_TIMEOUT, waits=())
-                return result["status"] if result["status"] != "erro_http" else f"erro_http_{result.get('codigo')}", \
-                    time.monotonic() - started
+                status = result["status"] if result["status"] != "erro_http" else f"erro_http_{result.get('codigo')}"
+                return status, time.monotonic() - started, result.get("tokens") or {}
 
             started = time.monotonic()
             with ThreadPoolExecutor(max_workers=level) as pool:
+                tokens_out, tokens_in = [], []
                 for future in as_completed([pool.submit(one) for _ in range(level * 2)]):
-                    status, duration = future.result()
+                    status, duration, tokens = future.result()
                     if status == "extraido":
                         durations.append(duration)
+                        if tokens.get("saida") is not None:
+                            tokens_out.append(tokens["saida"])
+                            tokens_in.append(tokens.get("entrada") or 0)
                     else:
                         errors[status] = errors.get(status, 0) + 1
             elapsed = time.monotonic() - started
@@ -377,7 +396,11 @@ def run_capacity(model, levels):
                 "simultaneas": level, "chamadas": level * 2, "ok": len(durations), "erros": errors,
                 "paginas_por_minuto": round(len(durations) / elapsed * 60, 1) if elapsed else None,
                 "tempo_medio_s": round(sum(durations) / len(durations), 1) if durations else None,
-                "tempo_p95_s": round(durations[int(len(durations) * .95) - 1], 1) if durations else None})
+                "tempo_p95_s": round(durations[int(len(durations) * .95) - 1], 1) if durations else None,
+                "tokens_saida_medio": round(sum(tokens_out) / len(tokens_out)) if tokens_out else None,
+                "tokens_entrada_medio": round(sum(tokens_in) / len(tokens_in)) if tokens_in else None})
+            if errors and len(errors) and sum(errors.values()) > level:  # saturou: não insiste nos níveis maiores
+                break
         ok = [row for row in CAPACITY["resultados"] if not row["erros"] and row["paginas_por_minuto"]]
         best = None
         for row in ok:  # sobe enquanto ganhar ao menos 10% de vazão sem erros
@@ -451,8 +474,17 @@ def extract_form_page(model, png, *, show_preview=False, inventory=False, texts=
         choice = payload["choices"][0]
         result["motivo_termino"] = choice.get("finish_reason")
         if result["motivo_termino"] == "length":
-            result["status"] = "resposta_truncada"
-            return result
+            if inventory and body["max_tokens"] < 2800:  # repete uma vez com limite maior
+                body["max_tokens"] = 2800
+                result, payload = llm_call(body, timeout, waits)
+                result.update(modelo=model, tempo_ms=round((time.monotonic() - started) * 1000))
+                if result["status"] != "conectado":
+                    return result
+                choice = payload["choices"][0]
+                result["motivo_termino"] = choice.get("finish_reason")
+            if result["motivo_termino"] == "length":
+                result["status"] = "resposta_truncada"
+                return result
         content = choice["message"]["content"]
         if not isinstance(content, str) or not content.strip():
             result["status"] = "resposta_sem_conteudo"
@@ -743,7 +775,7 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                     if not CAPACITY_LOCK.acquire(blocking=False):
                         self.send_json(409, {"status": "teste_em_andamento"})
                         return
-                    levels = [level for level in (8, 16, 32, 64) if level <= 128]
+                    levels = [8, 16, 32, 64, 96, 128]
                     model = os.environ.get("IPTU_BATCH_MODEL", "qwen3.8-27b-fast")
                     CAPACITY.update(status="executando", resultados=[], recomendacao=None, motivo=None)
                     Thread(target=run_capacity, args=(model, levels), daemon=True).start()
@@ -1144,6 +1176,7 @@ if __name__ == "__main__":
         # 1ª passada: prazo curto e uma nova tentativa, para chamadas travadas não prenderem vagas.
         # As páginas que falharem são relidas no fim do lote (slow=True), com prazo longo.
         timeout, waits = (LLM_TIMEOUT, (2, 5, 15)) if slow else (FAST_TIMEOUT, (2,))
+        TOKENS.totais = {"entrada": 0, "saida": 0, "chamadas": 0}
         result = extract_form_page(model, png, inventory=True, texts=texts, timeout=timeout, waits=waits)
         # Resposta fora do esquema: tenta uma vez com o modelo reserva, se configurado.
         if fallback and result["status"] in {"json_invalido", "esquema_invalido", "resposta_truncada",
@@ -1153,7 +1186,10 @@ if __name__ == "__main__":
         if result.get("status") == "extraido" and leitura.is_form_page(page):
             result["tipo"] = "requerimento"  # formulário identificado pelo texto da página
             result["formulario_pelo_texto"] = True
-        return detail_page(detail_model, verify_model, result, hires, timeout, waits)
+        result = detail_page(detail_model, verify_model, result, hires, timeout, waits)
+        result["tokens"] = TOKENS.totais  # a verificação paralela corre em outra thread e não entra na soma
+        TOKENS.totais = None
+        return result
 
     if sys.argv[1:] == ["worker"]:
         os.environ["IPTU_CACHE_PREVIEWS"] = "1"
