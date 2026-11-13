@@ -258,3 +258,25 @@ class Prazo(unittest.TestCase):
         report = parecer.assess(change(base_process(), data_requerimento="2026-06-15"), None)
         self.assertEqual(criteria(report)["prazo"]["status"], "pendente")
         self.assertEqual(report["resultado"], "em_analise")
+
+
+class ExercicioNaoBloqueia(unittest.TestCase):
+    def test_ano_nao_lido_vira_aviso_e_o_processo_e_aceito(self):
+        report = parecer.assess(change(base_process(), exercicio=None), None)
+        c = criteria(report)
+        self.assertEqual(c["exercicio"]["status"], "aviso")
+        self.assertEqual(report["resultado"], "enquadra_conferir_cadastro")
+        self.assertEqual((report["exercicio"], report["exercicio_lido"]), (parecer.EXERCICIO, None))
+
+    def test_ano_lido_diferente_aparece_no_aviso(self):
+        report = parecer.assess(change(base_process(), exercicio=2026), None)
+        self.assertIn("2026", criteria(report)["exercicio"]["motivo"])
+        self.assertEqual(report["resultado"], "enquadra_conferir_cadastro")
+
+    def test_ano_correto_nao_gera_aviso(self):
+        self.assertNotIn("exercicio", criteria(parecer.assess(base_process(), None)))
+
+    def test_renda_acima_do_teto_continua_indeferindo_sem_ano_lido(self):
+        process = change(base_process(), exercicio=None)
+        process["paginas"][3]["obtido"]["renda_bruta_centavos"] = 200000
+        self.assertEqual(parecer.assess(process, None)["resultado"], "nao_enquadra")

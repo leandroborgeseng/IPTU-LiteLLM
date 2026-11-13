@@ -196,7 +196,10 @@ def assess(process, review, cadastro=None):
     spouse_key = person_key(spouse)
 
     # Modalidade e condição para propor indeferimento.
-    exercise = unique("exercicio")
+    read_exercise = unique("exercicio")
+    # Todos os requerimentos recebidos são do exercício configurado: o ano não lido (ou lido diferente,
+    # por erro de leitura ou formulário antigo) vira aviso e não bloqueia o resultado.
+    exercise = EXERCICIO
     # Modalidade pelos benefícios do próprio requerente declarados no formulário; as perguntas sobre
     # cônjuge e dependente (BPC, pensão) não contam. Sem números declarados, usa a marcação lida.
     declared_kinds = {kind for kind in BENEFICIOS_DECLARADOS
@@ -214,8 +217,10 @@ def assess(process, review, cadastro=None):
         reason = ("Números SEI divergentes entre nomes e pastas." if process.get("sei_divergente")
                   else "Número do SEI não encontrado nos nomes das pastas e arquivos.")
         add("processo_sei", "aviso", reason, process.get("fontes_numero_sei"))
-    if exercise != EXERCICIO:
-        add("exercicio", "pendente", f"Confirme se o exercício solicitado é {EXERCICIO}.", facts.get("exercicio"))
+    if read_exercise != EXERCICIO:
+        add("exercicio", "aviso", (f"O requerimento indica o exercício {read_exercise}; considerado {EXERCICIO}."
+                                   if read_exercise else f"Exercício não identificado no requerimento; considerado {EXERCICIO}."),
+            facts.get("exercicio"))
     if modalities & SOCIAIS:
         add("modalidade", "pendente", "Modalidade PCD ou doença grave: encaminhar à assistência social.",
             facts.get("modalidade_criterio"))
@@ -562,7 +567,7 @@ def assess(process, review, cadastro=None):
             "numero_processo_sei": process.get("numero_processo_sei"),
             "fontes_numero_sei": process.get("fontes_numero_sei", []),
             "sei_divergente": process.get("sei_divergente", False),
-            "exercicio": exercise, "modalidade": modality, "fatos_do_requerimento": facts,
+            "exercicio": exercise, "exercicio_lido": read_exercise, "modalidade": modality, "fatos_do_requerimento": facts,
             "inventario_paginas": inventory, "possiveis_comprovantes": support,
             "comprovantes_de_renda_lidos": income, "renda_bruta_familiar_centavos": amount,
             "renda_calculada_comprovantes_centavos": estimate["total_centavos"] if estimate else None,
