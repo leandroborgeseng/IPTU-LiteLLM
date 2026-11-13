@@ -331,12 +331,12 @@ def inventory(path, name):
     return list(processes.values())
 
 
-def render_page(pdf, number, extension=".pdf", size=1800, gray=True):
+def render_page(pdf, number, extension=".pdf", size=1800, gray=True, jpeg=False):
     with RENDER_SLOTS:
-        return _render_page(pdf, number, extension, size, gray)
+        return _render_page(pdf, number, extension, size, gray, jpeg)
 
 
-def _render_page(pdf, number, extension, size, gray):
+def _render_page(pdf, number, extension, size, gray, jpeg=False):
     if extension in IMAGE_FORMATS:
         if number != 1:
             return None
@@ -349,15 +349,19 @@ def _render_page(pdf, number, extension, size, gray):
                 page = Image.new("RGB", normalized.size, "white")
                 page.paste(normalized, mask=normalized.getchannel("A"))
                 output = io.BytesIO()
-                page.save(output, format="PNG")
+                if jpeg:
+                    page.save(output, format="JPEG", quality=85)
+                else:
+                    page.save(output, format="PNG")
                 return output.getvalue()
         except (OSError, ValueError, Image.DecompressionBombError):
             return None
     with tempfile.TemporaryDirectory() as tmp:
-        png = Path(tmp) / "pagina.png"
+        png = Path(tmp) / ("pagina.jpg" if jpeg else "pagina.png")
         completed = subprocess.run(
             [*NICE, "pdftoppm", "-f", str(number), "-l", str(number), "-singlefile",
-             "-scale-to", str(size), *(["-gray"] if gray else []), "-png", str(pdf), str(png.with_suffix(""))],
+             "-scale-to", str(size), *(["-gray"] if gray else []),
+             *(["-jpeg", "-jpegopt", "quality=85"] if jpeg else ["-png"]), str(pdf), str(png.with_suffix(""))],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
         )
         if completed.returncode or not png.exists():
@@ -432,9 +436,9 @@ def validate_page_kind(result, texts):
 
 def page_workers():
     try:
-        return max(1, min(64, int(os.environ.get("IPTU_PAGE_WORKERS", "16"))))
+        return max(1, min(64, int(os.environ.get("IPTU_PAGE_WORKERS", "6"))))
     except ValueError:
-        return 16
+        return 6
 
 
 def process_page(pdf, number, evidence, analyze, extension=".pdf"):
@@ -470,7 +474,7 @@ def process_page(pdf, number, evidence, analyze, extension=".pdf"):
             started = time.monotonic()
             attempts += 1
             # Alta resolução colorida só é gerada se a página precisar de leitura detalhada.
-            hires = lambda: render_page(pdf, number, extension, size=2600, gray=False)  # noqa: E731
+            hires = lambda: render_page(pdf, number, extension, size=2200, gray=False, jpeg=True)  # noqa: E731
             result = analyze(image, texts, hires=hires)
             if result["status"] == "falha_de_conexao" or result.get("codigo") in {429, 502, 503, 504}:
                 time.sleep(1)
@@ -493,7 +497,7 @@ def process_page(pdf, number, evidence, analyze, extension=".pdf"):
         texts["status_ocr"] = "falha_ocr"
     result = validate_page_kind(result, texts)
     save(evidence, {**result, **texts, "versao_extracao": PAGE_SCHEMA,
-                    "tempos_ms": timing, "tentativas_ia": attempts})
+                    "tempos_ms": timing, "tentativas_ia": attempts + max(0, result.get("tentativas_llm", 1) - 1)})
     return timing, attempts, result["status"] != "extraido" or texts.get("status_ocr") == "falha_ocr"
 
 
@@ -799,3 +803,49 @@ def batch_summary(path):
             row["resultado"] = "processando"
         rows.append(row)
     return rows
+
+
+def diagnostics(path):
+    """Resumo do lote: páginas por situação, leitura detalhada, divergências e tempos médios."""
+    report = {"paginas": 0, "por_situacao": {}, "leitura_detalhada": {}, "divergencias": 0,
+              "campos_descartados": 0, "novas_tentativas": 0, "tempo_medio_ms": {}, "exemplos_de_falha": []}
+    sums = {}
+    manifest = load(path / "manifest.json") if (path / "manifest.json").exists() else []
+    for process in manifest:
+        folder = path / process["id"]
+        if not folder.is_dir():
+            continue
+        origin = {item["id"]: item["origem"] for item in process["arquivos"] if item["id"]}
+        for page in sorted(folder.iterdir()):
+            if not PAGE_RESULT.fullmatch(page.name):
+                continue
+            try:
+                row = load(page)
+            except (OSError, ValueError):
+                continue
+            report["paginas"] += 1
+            status = row.get("status") or "desconhecido"
+            if status == "erro_http":
+                status = f"erro_http_{row.get('codigo')}"
+            elif status == "falha_de_conexao" and row.get("detalhe"):
+                status = f"falha_de_conexao ({row['detalhe']})"
+            report["por_situacao"][status] = report["por_situacao"].get(status, 0) + 1
+            detail = (row.get("leitura_detalhada") or {}).get("status")
+            if detail:
+                report["leitura_detalhada"][detail] = report["leitura_detalhada"].get(detail, 0) + 1
+            report["divergencias"] += len(row.get("divergencias") or [])
+            report["campos_descartados"] += len(row.get("campos_descartados") or [])
+            report["novas_tentativas"] += max(0, (row.get("tentativas_ia") or 1) - 1)
+            for stage, ms in (row.get("tempos_ms") or {}).items():
+                total, count = sums.get(stage, (0, 0))
+                sums[stage] = (total + ms, count + 1)
+            if status != "extraido" and len(report["exemplos_de_falha"]) < 10:
+                key, number = page.stem.rsplit("-", 1)
+                report["exemplos_de_falha"].append({"processo": process["processo"], "arquivo": origin.get(key, key),
+                                                    "pagina": int(number), "situacao": status})
+    report["tempo_medio_ms"] = {stage: round(total / count) for stage, (total, count) in sums.items() if count}
+    state = load(path / "batch.json")
+    report["lote"] = {key: state.get(key) for key in ("status", "progresso", "desempenho")}
+    report["configuracao"] = {"paginas_em_paralelo": page_workers(), "renderizacao_em_paralelo": RENDER_SLOTS._initial_value,
+                              "cpus": available_cpus()}
+    return report

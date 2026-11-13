@@ -138,3 +138,49 @@ class RespostaTolerante(unittest.TestCase):
         self.assertEqual(app.coerce_value("renda_bruta_centavos", 162100, int), (162100, True))
         self.assertEqual(app.coerce_value("renda_bruta_centavos", "162100", int), (162100, True))
         self.assertEqual(app.coerce_value("exercicio", 2027.0, int), (2027, True))
+
+
+@unittest.skipIf(app is None, "dependência ausente")
+class ChamadasAoModelo(unittest.TestCase):
+    def setUp(self):
+        self.original = (app.gateway_request, app.time.sleep, app.ask_json)
+        app.time.sleep = lambda seconds: None
+
+    def tearDown(self):
+        app.gateway_request, app.time.sleep, app.ask_json = self.original
+
+    def replies(self, *results):
+        calls = []
+        def fake(path, body=None, timeout=5):
+            calls.append(timeout)
+            return results[len(calls) - 1]
+        app.gateway_request = fake
+        return calls
+
+    def test_tenta_de_novo_em_429_e_tempo_esgotado(self):
+        calls = self.replies(({"status": "erro_http", "codigo": 429}, None),
+                             ({"status": "falha_de_conexao", "detalhe": "tempo_limite"}, None),
+                             ({"status": "conectado"}, {"ok": 1}))
+        result, payload = app.llm_call({})
+        self.assertEqual((result["status"], result["tentativas_llm"], payload), ("conectado", 3, {"ok": 1}))
+        self.assertEqual(calls, [app.LLM_TIMEOUT] * 3)
+
+    def test_erro_definitivo_nao_repete(self):
+        calls = self.replies(({"status": "erro_http", "codigo": 400}, None))
+        self.assertEqual(app.llm_call({})[0]["tentativas_llm"], 1)
+        self.assertEqual(len(calls), 1)
+
+    def test_desiste_apos_quatro_tentativas(self):
+        self.replies(*[({"status": "erro_http", "codigo": 503}, None)] * 4)
+        self.assertEqual(app.llm_call({})[0]["tentativas_llm"], 4)
+
+    def test_tipo_da_imagem(self):
+        self.assertTrue(app.image_url(b"\xff\xd8\xff\xe0abc").startswith("data:image/jpeg;base64,"))
+        self.assertTrue(app.image_url(b"\x89PNG....").startswith("data:image/png;base64,"))
+
+    def test_extrato_completo_dispensa_leitura_detalhada(self):
+        app.ask_json = lambda *a, **k: self.fail("não deveria chamar o modelo")
+        result = app.detail_page("m", "v", {"status": "extraido", "tipo": "beneficio", "obtido": {
+            "renda_bruta_centavos": 162100, "competencia_renda": "2026-03", "titular_renda": "X",
+            "numero_beneficio": "1"}}, hires=lambda: b"img")
+        self.assertEqual(result["leitura_detalhada"]["status"], "dispensada")

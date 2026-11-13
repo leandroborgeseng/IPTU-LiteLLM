@@ -374,6 +374,7 @@ async function refreshBatch() {
   }
   $('reanalisar').hidden = lot.status === 'recebendo';
   $('avaliar').hidden = lot.status !== 'concluido';
+  $('diagnostico').hidden = lot.status === 'recebendo';
   $('csv').hidden = !rows.length;
   const tally = {};
   for (const row of rows) tally[row.resultado] = (tally[row.resultado] || 0) + 1;
@@ -545,8 +546,44 @@ $('gabarito').onchange = async (event) => {
             ...(row.campos_divergentes || []).map((c) => c.campo + ': ' + c.obtido + ' (esperado ' + c.esperado + ')'),
             row.obtido !== row.esperado ? row.motivo : '',
           ].filter(Boolean).join(' · ')))))));
+    document.querySelector('#eval-box h3').textContent = 'Assertividade do lote';
     $('eval-box').showModal();
   } catch (error) {
     alert('Gabarito inválido: ' + error.message);
   }
+};
+
+/* ---------- Diagnóstico do lote ---------- */
+const SITUACAO = {
+  extraido: 'lidas com sucesso', esquema_invalido: 'resposta fora do formato', json_invalido: 'resposta não é JSON',
+  resposta_truncada: 'resposta cortada (limite de tokens)', resposta_sem_conteudo: 'resposta vazia',
+  falha_de_leitura: 'erro interno na página', pagina_inacessivel: 'página não renderizou',
+  erro_http_429: 'modelo ocupado (429)', erro_http_500: 'erro no LiteLLM (500)', erro_http_502: 'LiteLLM indisponível (502)',
+  erro_http_503: 'LiteLLM indisponível (503)', erro_http_504: 'LiteLLM sem resposta (504)',
+};
+const ETAPA = {renderizacao_ms: 'renderização', texto_pdf_ms: 'texto do PDF', litellm_ms: 'modelo (todas as leituras da página)'};
+$('diagnostico').onclick = async () => {
+  try {
+    const d = await request(api + '/' + currentBatch + '/diagnostico');
+    const seconds = (ms) => (ms / 1000).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' s';
+    const list = (entries, labels) => el('ul', {}, ...entries.map(([key, value]) =>
+      el('li', {}, value + ' · ' + (labels[key] || key))));
+    const c = d.configuracao;
+    $('eval-body').replaceChildren(
+      el('p', {}, d.paginas + ' páginas · ' + d.novas_tentativas + ' novas tentativas · ' + d.divergencias +
+        ' divergências na dupla leitura · ' + d.campos_descartados + ' campos descartados'),
+      el('strong', {}, 'Páginas por situação'), list(Object.entries(d.por_situacao).sort((a, b) => b[1] - a[1]), SITUACAO),
+      el('strong', {}, 'Leitura detalhada'), list(Object.entries(d.leitura_detalhada), {dispensada: 'dispensada (1ª leitura completa)'}),
+      el('strong', {}, 'Tempo médio por página'), list(Object.entries(d.tempo_medio_ms).map(([k, v]) => [k, seconds(v)]), ETAPA),
+      d.exemplos_de_falha.length ? el('strong', {}, 'Exemplos de falha') : null,
+      d.exemplos_de_falha.length ? el('ul', {}, ...d.exemplos_de_falha.map((f) =>
+        el('li', {}, f.processo + ' · ' + f.arquivo.split('/').pop() + ' p. ' + f.pagina + ' · ' + (SITUACAO[f.situacao] || f.situacao)))) : null,
+      el('p', {class: 'why'}, 'Modelos: ' + c.modelo + ' / ' + (c.modelo_detalhado || c.modelo) + ' / ' +
+        (c.modelo_verificacao || 'mesmo') + ' · ' + c.paginas_em_paralelo + ' páginas em paralelo · ' +
+        c.cpus + ' CPU(s) · limite ' + c.limite_tempo_s + ' s por chamada'),
+      el('button', {type: 'button', onclick: () => navigator.clipboard.writeText(JSON.stringify(d, null, 2))},
+        'Copiar diagnóstico'));
+    document.querySelector('#eval-box h3').textContent = 'Diagnóstico do lote';
+    $('eval-box').showModal();
+  } catch (error) { alert('Falha ao gerar o diagnóstico: ' + error.message); }
 };
