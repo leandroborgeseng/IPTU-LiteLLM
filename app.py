@@ -629,21 +629,8 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                     self.send_json(code, result)
                     return
                 if parts[3] == "reanalisar":
-                    with batch.LOCK:
-                        batch.check_reset()
-                        result = batch.describe(path)
-                        if result["status"] not in {"concluido", "falha"}:
-                            self.send_json(409, {"status": "lote_ocupado"})
-                            return
-                        manifest = path / "manifest.json"
-                        if manifest.exists():
-                            for item in batch.load(manifest):
-                                (path / item["id"] / "complete.json").unlink(missing_ok=True)
-                        result["status"] = "na_fila"
-                        result.pop("motivo", None)
-                        batch.save(path / "batch.json", result)
-                        batch.WAKE.set()
-                    self.send_json(202, result)
+                    code, result = batch.request_rerun(path)
+                    self.send_json(code, result)
                     return
                 if parts[3] == "processar":
                     result = batch.queue(path)
@@ -682,6 +669,10 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                     for item in batch.load(manifest)
                 ] if manifest.exists() else []
                 self.send_json(200, result)
+                return
+            if self.command == "POST" and len(parts) == 6 and parts[3] == "processos" and parts[5] == "reanalisar":
+                code, result = batch.request_rerun(path, parts[4])
+                self.send_json(code, result)
                 return
             if len(parts) in {5, 6} and parts[3] == "processos":
                 detail = batch.process_detail(path, parts[4])

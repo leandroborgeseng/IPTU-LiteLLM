@@ -73,3 +73,39 @@ class Importacao(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Reanalise(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        (self.dir / "upload").write_bytes(b"x")
+        self.folder = self.dir / ("c" * 32)
+        self.folder.mkdir()
+        key = "d" * 32
+        batch.save(self.dir / "manifest.json", [{"id": self.folder.name, "processo": SEI,
+                                                 "arquivos": [{"id": key, "origem": "p.pdf", "erro": None}]}])
+        for name, value in {f"{key}.json": {"paginas": 1, "total": 1}, f"{key}-1.json": {"status": "extraido"},
+                            "complete.json": {"concluido": True}, "review.json": {"nota": "ok"}}.items():
+            batch.save(self.folder / name, value)
+
+    def state(self, status):
+        batch.save(self.dir / "batch.json", {"id": "x", "nome": "l.zip", "bytes": 1, "status": status})
+
+    def test_processo_concluido_rele_todas_as_paginas_e_mantem_a_conferencia(self):
+        self.state("concluido")
+        code, result = batch.request_rerun(self.dir, self.folder.name)
+        self.assertEqual((code, result["status"]), (202, "na_fila"))
+        names = sorted(p.name for p in self.folder.iterdir())
+        self.assertEqual(names, ["d" * 32 + ".json", "review.json"])
+
+    def test_durante_o_processamento_agenda_nova_rodada(self):
+        self.state("processando")
+        code, result = batch.request_rerun(self.dir)
+        self.assertEqual((code, result["status"]), (202, "processando"))
+        self.assertTrue((self.dir / ".rodar_novamente").exists())
+        self.assertFalse((self.folder / "complete.json").exists())
+        self.assertTrue((self.folder / ("d" * 32 + "-1.json")).exists())  # lote: só falhas são relidas
+
+    def test_envio_incompleto_nao_reanalisa(self):
+        self.state("recebendo")
+        self.assertEqual(batch.request_rerun(self.dir)[0], 409)

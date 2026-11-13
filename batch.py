@@ -497,6 +497,43 @@ def process_page(pdf, number, evidence, analyze, extension=".pdf"):
     return timing, attempts, result["status"] != "extraido" or texts.get("status_ocr") == "falha_ocr"
 
 
+PAGE_RESULT = re.compile(r"[a-f0-9]{32}-[0-9]+\.json")
+
+
+def request_rerun(path, process_id=None):
+    """Agenda nova leitura. Lote: páginas com falha ou de versão antiga. Processo: todas as páginas.
+
+    Conferências manuais (review.json) são mantidas. Se o lote estiver em processamento,
+    a nova rodada começa assim que a atual terminar.
+    """
+    with LOCK:
+        check_reset()
+        state = describe(path)
+        if state["status"] == "recebendo":
+            return 409, {"status": "envio_incompleto"}
+        manifest = load(path / "manifest.json") if (path / "manifest.json").exists() else []
+        targets = [item for item in manifest if process_id is None or item["id"] == process_id]
+        if process_id and not targets:
+            raise FileNotFoundError
+        for item in targets:
+            folder = path / item["id"]
+            (folder / "complete.json").unlink(missing_ok=True)
+            if process_id and folder.is_dir():
+                for page in folder.iterdir():
+                    if PAGE_RESULT.fullmatch(page.name):
+                        page.unlink()
+                (folder / "sil.json").unlink(missing_ok=True)
+        if state["status"] in {"concluido", "falha"} or not manifest:
+            state["status"] = "na_fila"
+            state.pop("motivo", None)
+            state.pop("recebido", None)
+            save(path / "batch.json", state)
+        else:
+            (path / ".rodar_novamente").touch()
+        WAKE.set()
+        return 202, describe(path)
+
+
 def process_batch(path, analyze):
     state = load(path / "batch.json")
     check_reset()
@@ -591,6 +628,10 @@ def process_batch(path, analyze):
     state.pop("progresso", None)
     state["status"] = "concluido"
     state["desempenho"]["duracao_ms"] = round((time.monotonic() - batch_started) * 1000)
+    rerun = path / ".rodar_novamente"
+    if rerun.exists():  # reanálise pedida durante esta rodada
+        rerun.unlink()
+        state["status"] = "na_fila"
     save(path / "batch.json", state)
 
 

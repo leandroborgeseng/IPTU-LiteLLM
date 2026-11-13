@@ -372,7 +372,7 @@ async function refreshBatch() {
   } else if (lot.status === 'concluido' && $('job').classList.contains('on')) {
     step('pronto', rows.length + ' processo(s) analisado(s).', 1);
   }
-  $('reanalisar').hidden = !['concluido', 'falha'].includes(lot.status);
+  $('reanalisar').hidden = lot.status === 'recebendo';
   $('avaliar').hidden = lot.status !== 'concluido';
   $('csv').hidden = !rows.length;
   const tally = {};
@@ -395,9 +395,24 @@ async function refreshBatch() {
 
 $('batches').onchange = () => { $('job').classList.remove('on'); if ($('batches').value) selectBatch($('batches').value); };
 $('reanalisar').onclick = async () => {
-  await request(api + '/' + currentBatch + '/reanalisar', {method: 'POST'}).catch((e) => alert(e.message));
-  step('ler', 'Reanalisando…', 0);
-  refreshBatch();
+  if (!confirm('Reler as páginas com falha ou lidas por versão anterior em todos os processos deste lote?')) return;
+  try {
+    const lot = await request(api + '/' + currentBatch + '/reanalisar', {method: 'POST'});
+    step('ler', lot.status === 'processando' ? 'Reanálise agendada: começa quando a leitura atual terminar.'
+      : 'Reanalisando…', 0);
+    refreshBatch();
+  } catch (error) { alert('Não foi possível reanalisar: ' + error.message); }
+};
+$('rerun-process').onclick = async () => {
+  if (!confirm('Ler de novo todas as páginas deste processo? A conferência manual registrada é mantida.')) return;
+  try {
+    const lot = await request(api + '/' + currentBatch + '/processos/' + currentProcess + '/reanalisar', {method: 'POST'});
+    $('d-badge').className = 'badge r-processando';
+    $('d-badge').textContent = lot.status === 'processando' ? 'Reanálise agendada' : 'Reanalisando';
+    step('ler', lot.status === 'processando' ? 'Reanálise do processo agendada: começa quando a leitura atual terminar.'
+      : 'Reanalisando o processo…', 0);
+    refreshBatch();
+  } catch (error) { alert('Não foi possível reanalisar: ' + error.message); }
 };
 $('limpar').onclick = async () => {
   if (!confirm('Apagar todos os lotes, documentos e conferências salvas?')) return;
