@@ -312,3 +312,26 @@ class Tokens(unittest.TestCase):
         app.extract_form_page("m", b"\xff\xd8\xffimg", inventory=True)
         self.assertEqual(result["tokens"], {"entrada": 1500, "saida": 60})
         self.assertEqual(app.TOKENS.totais, {"entrada": 3000, "saida": 120, "chamadas": 2})
+
+
+@unittest.skipIf(app is None, "dependência ausente")
+class PrazoAdaptativo(unittest.TestCase):
+    def setUp(self):
+        self.saved = list(app.RECENT)
+        app.RECENT.clear()
+
+    def tearDown(self):
+        app.RECENT[:] = self.saved
+
+    def test_sem_historico_usa_prazo_seguro(self):
+        self.assertGreaterEqual(app.fast_timeout(), 90)
+
+    def test_servidor_carregado_aumenta_o_prazo(self):
+        for _ in range(100):
+            app.note_latency(70.0)  # chamadas saudáveis de ~70 s, como no teste de capacidade sob carga
+        self.assertEqual(app.fast_timeout(), min(175, app.LLM_TIMEOUT))  # 2,5 × 70 s = 175 s (abaixo do teto de 180 s)
+
+    def test_servidor_livre_mantem_o_piso(self):
+        for _ in range(100):
+            app.note_latency(12.0)
+        self.assertEqual(app.fast_timeout(), 90)

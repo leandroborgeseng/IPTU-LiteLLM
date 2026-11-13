@@ -703,10 +703,16 @@ def process_batch(path, analyze):
                     for key, items in jobs_by_process.items()
                     for pdf, number, evidence, extension in items}
             retry = []
+            waiting = set()  # processos com páginas para a 2ª passada: só concluem depois dela
             for job in as_completed(jobs):
                 timing, attempts, failed = job.result()
                 if failed:
                     retry.append(job)
+                    try:
+                        if load(jobs[job][3]).get("status") in TRANSIENT_STATUSES:
+                            waiting.add(jobs[job][0])
+                    except (OSError, ValueError):
+                        waiting.add(jobs[job][0])
                 performance = state["desempenho"]
                 performance["paginas_processadas"] += 1
                 performance["paginas_com_falha"] += int(failed)
@@ -720,12 +726,14 @@ def process_batch(path, analyze):
                 progress["atualizado_em"] = time.time()  # mostra no painel se a leitura parou
                 key = jobs[job][0]
                 remaining[key] -= 1
-                if not remaining[key]:
+                if not remaining[key] and key not in waiting:
                     save(path / key / "complete.json", {"concluido": True})
                 save(path / "batch.json", state)
         finally:
             pool.shutdown(wait=True, cancel_futures=True)
         second_pass(path, state, progress, jobs_job_args(jobs, retry), analyze, workers)
+        for key in waiting:  # mesmo que alguma página siga com falha, o processo recebe parecer (com a pendência)
+            save(path / key / "complete.json", {"concluido": True})
     state.pop("progresso", None)
     state["status"] = "concluido"
     state["desempenho"]["duracao_ms"] = round((time.monotonic() - batch_started) * 1000)

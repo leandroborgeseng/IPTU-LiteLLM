@@ -108,7 +108,29 @@ LLM_TIMEOUT = int(os.environ.get("IPTU_LLM_TIMEOUT", "180") or 180)
 TRANSIENT = {429, 500, 502, 503, 504}
 
 
-FAST_TIMEOUT = int(os.environ.get("IPTU_LLM_TIMEOUT_RAPIDO", "60") or 60)
+FAST_TIMEOUT = int(os.environ.get("IPTU_LLM_TIMEOUT_RAPIDO", "90") or 90)  # piso do prazo da 1ª passada
+RECENT = []  # durações (s) das chamadas bem-sucedidas mais recentes
+RECENT_LOCK = __import__("threading").Lock()
+
+
+def note_latency(seconds):
+    with RECENT_LOCK:
+        RECENT.append(seconds)
+        del RECENT[:-200]
+
+
+def fast_timeout():
+    """Prazo da 1ª passada: ~2,5× o p95 das chamadas recentes (piso FAST_TIMEOUT, teto LLM_TIMEOUT).
+
+    Com o servidor de IA carregado as chamadas normais demoram mais; um prazo fixo curto abandonaria
+    chamadas saudáveis. O prazo acompanha a carga real.
+    """
+    with RECENT_LOCK:
+        sample = sorted(RECENT)
+    if len(sample) < 20:
+        return max(FAST_TIMEOUT, min(LLM_TIMEOUT, 120))
+    p95 = sample[int(len(sample) * .95) - 1]
+    return int(max(FAST_TIMEOUT, min(LLM_TIMEOUT, p95 * 2.5)))
 TOKENS = __import__("threading").local()  # tokens das chamadas feitas por esta thread (uma página por vez)
 
 
@@ -136,7 +158,10 @@ def with_tokens(totals, function, *args):
 def llm_call(body, timeout=None, waits=(2, 5, 15)):
     """Chamada ao LiteLLM com novas tentativas e espera crescente em falhas transitórias."""
     for attempt in range(len(waits) + 1):
+        started = time.monotonic()
         result, payload = gateway_request("/chat/completions", body, timeout=timeout or LLM_TIMEOUT)
+        if result["status"] == "conectado":
+            note_latency(time.monotonic() - started)
         usage = (payload or {}).get("usage") if isinstance(payload, dict) else None
         if isinstance(usage, dict):
             note_tokens(usage)
@@ -1196,7 +1221,7 @@ if __name__ == "__main__":
     def analyze(png, texts, hires=None, slow=False):
         # 1ª passada: prazo curto e uma nova tentativa, para chamadas travadas não prenderem vagas.
         # As páginas que falharem são relidas no fim do lote (slow=True), com prazo longo.
-        timeout, waits = (LLM_TIMEOUT, (2, 5, 15)) if slow else (FAST_TIMEOUT, (2,))
+        timeout, waits = (LLM_TIMEOUT, (2, 5, 15)) if slow else (fast_timeout(), (2,))
         TOKENS.totais = {"entrada": 0, "saida": 0, "chamadas": 0}
         result = extract_form_page(model, png, inventory=True, texts=texts, timeout=timeout, waits=waits)
         # Resposta fora do esquema: tenta uma vez com o modelo reserva, se configurado.

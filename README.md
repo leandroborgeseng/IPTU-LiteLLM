@@ -138,7 +138,7 @@ px, resposta curta). Requerimento, extrato e identidade recebem **sempre** leitu
 colorida; o requerimento ainda tem a leitura de verificação, em paralelo. Um lote de 150 processos
 (~2.500 páginas) gera ~1.900 classificações + ~1.000 leituras detalhadas.
 
-- **1ª passada rápida:** `IPTU_LLM_TIMEOUT_RAPIDO` (60 s) e uma nova tentativa; a página que falhar volta
+- **1ª passada com prazo adaptativo:** ~2,5× o tempo (p95) das chamadas recentes, entre `IPTU_LLM_TIMEOUT_RAPIDO` (90 s) e `IPTU_LLM_TIMEOUT` (180 s), e uma nova tentativa; o processo só recebe parecer depois da 2ª passada; a página que falhar volta
   para o fim do lote e é relida com `IPTU_LLM_TIMEOUT` (180 s) e três tentativas. Chamadas travadas não
   prendem as vagas e nenhuma página fica sem leitura. Falha na leitura detalhada devolve a página à fila
   (nunca segue com o requerimento incompleto).
