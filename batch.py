@@ -442,8 +442,13 @@ def process_page(pdf, number, evidence, analyze, extension=".pdf"):
                 check_reset()
                 attempts += 1
                 result = analyze(image, texts, hires=hires)
+    except ResetRequested:
+        raise
     except (OSError, subprocess.TimeoutExpired):
         pass
+    except Exception as error:  # um erro numa página não pode derrubar o lote inteiro
+        print(f"Falha na página {number} de {pdf.name}: {type(error).__name__}", flush=True)
+        result = {"status": "falha_de_leitura", "erro": type(error).__name__}
     timing[stage] = round((time.monotonic() - started) * 1000)
     check_reset()
     if "texto_ocr" in result:

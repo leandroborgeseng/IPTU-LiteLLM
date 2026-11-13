@@ -1,7 +1,6 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
 const api = '/api/lotes';
-const CHUNK = 8 * 1024 * 1024;
 const RESUME_KEY = 'iptu-upload-pendente';
 const ACCEPTED = /\.(pdf|zip|jpe?g|png|webp|html?)$/i;
 const RESULT = {
@@ -172,7 +171,36 @@ async function buildZip(items, onProgress) {
 }
 
 /* ---------- Envio retomável ---------- */
+const PART = 4 * 1024 * 1024;       // partes menores: menos retrabalho se a conexão cair
+const PART_TIMEOUT = 180 * 1000;    // tempo máximo por parte
+const RETRIES = 5;
+
+function sendPart(id, offset, data, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', api + '/' + id + '/parte');
+    xhr.setRequestHeader('Upload-Offset', String(offset));
+    xhr.timeout = PART_TIMEOUT;
+    xhr.upload.onprogress = (event) => onProgress(event.loaded);
+    xhr.onload = () => {
+      let body = null;
+      try { body = JSON.parse(xhr.responseText); } catch { /* resposta não JSON (proxy) */ }
+      if (xhr.status === 200 && body) resolve(body);
+      else reject(Object.assign(new Error(body?.status || 'HTTP ' + xhr.status), {status: xhr.status}));
+    };
+    xhr.onerror = () => reject(new Error('conexão interrompida'));
+    xhr.ontimeout = () => reject(new Error('tempo esgotado'));
+    xhr.send(data);
+  });
+}
+
+function duration(seconds) {
+  if (!isFinite(seconds)) return '';
+  return seconds < 90 ? Math.round(seconds) + ' s' : Math.round(seconds / 60) + ' min';
+}
+
 async function send(blob, name, resumeKey) {
+  step('enviar', 'Conectando ao servidor…', 0);
   const saved = JSON.parse(localStorage.getItem(RESUME_KEY) || 'null');
   let lot = null;
   if (saved?.key === resumeKey) lot = await request(api + '/' + saved.id).catch(() => null);
@@ -180,13 +208,38 @@ async function send(blob, name, resumeKey) {
     lot = await request(api, {method: 'POST', body: JSON.stringify({nome: name, bytes: blob.size})});
     localStorage.setItem(RESUME_KEY, JSON.stringify({key: resumeKey, id: lot.id}));
   }
-  for (let offset = lot.recebido || 0; offset < blob.size;) {
-    const result = await request(api + '/' + lot.id + '/parte', {
-      method: 'POST', headers: {'Upload-Offset': String(offset)}, body: blob.slice(offset, offset + CHUNK),
-    });
-    offset = result.recebido;
-    step('enviar', 'Enviando ' + Math.round(100 * offset / blob.size) + '%', offset / blob.size);
+  const mb = (bytes) => (bytes / 1048576).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' MB';
+  const started = performance.now();
+  const startOffset = lot.recebido || 0;
+  let offset = startOffset;
+  let failures = 0;
+  const show = (sent) => {
+    const elapsed = (performance.now() - started) / 1000;
+    const speed = (sent - startOffset) / Math.max(elapsed, 0.001);
+    const left = speed > 0 ? (blob.size - sent) / speed : Infinity;
+    step('enviar', 'Enviando ' + mb(sent) + ' de ' + mb(blob.size) + ' · ' + Math.round(100 * sent / blob.size) + '%'
+      + (elapsed > 2 && speed > 0 ? ' · ' + mb(speed) + '/s · faltam ' + duration(left) : '')
+      + (failures ? ' · nova tentativa ' + failures + ' de ' + RETRIES : ''), sent / blob.size);
+  };
+  show(offset);
+  while (offset < blob.size) {
+    try {
+      const result = await sendPart(lot.id, offset, blob.slice(offset, offset + PART), (loaded) => show(offset + loaded));
+      offset = result.recebido;
+      failures = 0;
+      show(offset);
+    } catch (error) {
+      failures += 1;
+      if (failures > RETRIES) throw new Error(error.message + ' após ' + RETRIES + ' tentativas');
+      step('enviar', 'Falha no envio (' + error.message + '). Tentando de novo em ' + 2 * failures + ' s…');
+      await new Promise((resolve) => setTimeout(resolve, 2000 * failures));
+      // O servidor informa até onde recebeu; retoma desse ponto (cobre a parte que chegou sem resposta).
+      const current = await request(api + '/' + lot.id).catch(() => null);
+      if (current?.status === 'recebendo') offset = current.recebido;
+      else if (current) break;  // já completo
+    }
   }
+  step('enviar', 'Envio concluído. Iniciando a leitura…', 1);
   await request(api + '/' + lot.id + '/processar', {method: 'POST'});
   localStorage.removeItem(RESUME_KEY);
   return lot.id;
