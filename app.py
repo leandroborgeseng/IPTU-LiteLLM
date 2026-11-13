@@ -202,7 +202,18 @@ def coerce_fields(value, fields):
     return clean, sorted(dropped)
 
 
-def ask_json(model, prompt, png, max_tokens=2048, timeout=60):
+def strip_reasoning(content):
+    """Remove o raciocínio que alguns modelos (ex.: Qwen) escrevem antes do JSON."""
+    content = re.sub(r"(?is)<think>.*?</think>", "", content).strip()
+    if not content.startswith(("{", "```")):
+        start = content.find("{")
+        end = content.rfind("}")
+        if 0 <= start < end:
+            content = content[start:end + 1]
+    return content
+
+
+def ask_json(model, prompt, png, max_tokens=4096, timeout=90):
     """Uma chamada multimodal que deve devolver um objeto JSON. Retorna (status, objeto|None)."""
     body = {"model": model, "stream": False, "temperature": 0, "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": [
@@ -218,7 +229,7 @@ def ask_json(model, prompt, png, max_tokens=2048, timeout=60):
         choice = payload["choices"][0]
         if choice.get("finish_reason") == "length":
             return "resposta_truncada", None
-        content = (choice["message"]["content"] or "").strip()
+        content = strip_reasoning(choice["message"]["content"] or "")
         fenced = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", content, re.DOTALL | re.IGNORECASE)
         value = json.loads(fenced.group(1) if fenced else content)
     except (AttributeError, IndexError, KeyError, TypeError, ValueError):
@@ -368,7 +379,7 @@ def extract_form_page(model, png, *, show_preview=False, inventory=False, texts=
         if not isinstance(content, str) or not content.strip():
             result["status"] = "resposta_sem_conteudo"
             return result
-        content = content.strip()
+        content = strip_reasoning(content)
         fenced = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", content, re.DOTALL | re.IGNORECASE)
         result["formato"] = "bloco_markdown" if fenced else "texto"
         try:
@@ -873,6 +884,9 @@ if __name__ == "__main__":
     fallback = os.environ.get("IPTU_BATCH_MODEL_FALLBACK", "").strip()
 
     verify_model = os.environ.get("IPTU_VERIFY_MODEL", "").strip() or fallback or model
+    detail_model = os.environ.get("IPTU_DETAIL_MODEL", "").strip() or model
+    print(f"Modelos: leitura {model}; detalhada {detail_model}; verificação {verify_model}; "
+          f"reserva {fallback or '-'}", flush=True)
 
     def analyze(png, texts, hires=None):
         result = extract_form_page(model, png, inventory=True, texts=texts)
@@ -880,7 +894,7 @@ if __name__ == "__main__":
         if fallback and result["status"] in {"json_invalido", "esquema_invalido", "resposta_truncada",
                                              "resposta_sem_conteudo"}:
             result = extract_form_page(fallback, png, inventory=True, texts=texts)
-        return detail_page(model, verify_model, result, hires)
+        return detail_page(detail_model, verify_model, result, hires)
 
     if sys.argv[1:] == ["worker"]:
         os.environ["IPTU_CACHE_PREVIEWS"] = "1"

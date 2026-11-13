@@ -59,6 +59,19 @@ para escolher o modelo e para achar novos padrões de documento.
 
 ### Modelo
 
+Configuração sugerida para o LiteLLM da Prefeitura (confirme com o gabarito):
+
+| Variável | Modelo | Uso |
+|---|---|---|
+| `IPTU_BATCH_MODEL` | `qwen3.8-27b-fast` | 1ª leitura de todas as páginas |
+| `IPTU_DETAIL_MODEL` | `qwen3.8-27b` | leitura detalhada de requerimento, extrato e identidade |
+| `IPTU_VERIFY_MODEL` | `gemma-4-12b-it` | leitura independente do requerimento (outra família de modelo) |
+| `IPTU_BATCH_MODEL_FALLBACK` | `qwen3.8-27b` | resposta fora do formato |
+
+Se a verificação gerar muitas pendências de "leitura divergente" que o
+servidor confirma como erro do verificador, troque `IPTU_VERIFY_MODEL` por
+`qwen3.8-27b-fast`. O log do worker mostra na inicialização os modelos em uso.
+
 `IPTU_BATCH_MODEL` define o modelo multimodal. `IPTU_BATCH_MODEL_FALLBACK`
 (opcional) é usado uma vez quando a resposta do principal vem fora do
 esquema. Após trocar o modelo ou atualizar o sistema, use **Reanalisar lote**.

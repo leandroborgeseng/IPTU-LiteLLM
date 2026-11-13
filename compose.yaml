@@ -8,6 +8,7 @@ services:
       IPTU_PAGE_WORKERS: ${IPTU_PAGE_WORKERS:-16}
       IPTU_BATCH_MODEL: ${IPTU_BATCH_MODEL:-qwen3.8-27b-fast}
       IPTU_BATCH_MODEL_FALLBACK: ${IPTU_BATCH_MODEL_FALLBACK:-}
+      IPTU_DETAIL_MODEL: ${IPTU_DETAIL_MODEL:-}
       IPTU_VERIFY_MODEL: ${IPTU_VERIFY_MODEL:-}
       SIL_BASE_URL: ${SIL_BASE_URL:-https://interface-sandbox.siltecnologia.com.br/v1}
       SIL_CLIENT_ID: ${SIL_CLIENT_ID:-}
