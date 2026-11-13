@@ -120,6 +120,32 @@ logotipo oficial, coloque `logo.svg` (ou `.png`, `.jpg`, `.webp`) em `/data/marc
 `IPTU_PRAZO_INICIO`/`IPTU_PRAZO_FIM` (AAAA-MM-DD) para comparar com a data de assinatura do requerimento.
 Atualize-os a cada exercício; a mudança gera nova versão dos pareceres afetados.
 
+### Desempenho: como o tempo é gasto e como reduzir
+
+Por página: no servidor do sistema, texto digital (`pdftotext`) e imagem JPEG; páginas de texto digital sem
+interesse (andamentos, despachos) param aí. As demais vão à IA: a 1ª leitura **só classifica** (imagem de 1280
+px, resposta curta). Requerimento, extrato e identidade recebem **sempre** leitura detalhada em 1800 px
+colorida; o requerimento ainda tem a leitura de verificação, em paralelo. Um lote de 150 processos
+(~2.500 páginas) gera ~1.900 classificações + ~1.000 leituras detalhadas.
+
+- **1ª passada rápida:** `IPTU_LLM_TIMEOUT_RAPIDO` (60 s) e uma nova tentativa; a página que falhar volta
+  para o fim do lote e é relida com `IPTU_LLM_TIMEOUT` (180 s) e três tentativas. Chamadas travadas não
+  prendem as vagas e nenhuma página fica sem leitura. Falha na leitura detalhada devolve a página à fila
+  (nunca segue com o requerimento incompleto).
+- **Teste de capacidade da IA** (botão em Lotes enviados): mede páginas/minuto com 8, 16, 32 e 64 leituras
+  simultâneas usando uma página real e recomenda `IPTU_PAGE_WORKERS`. Rode com o servidor de IA livre.
+
+**Ajustes no servidor de IA** (para a equipe da H200). Se o teste mostrar páginas/minuto que não crescem
+ao dobrar as simultâneas, ou erros 429/5xx, o limite está antes da GPU:
+
+| Onde | Ajuste |
+|---|---|
+| vLLM | `--max-num-seqs 128` (ou mais), `--enable-prefix-caching` (as instruções se repetem em toda página), `--enable-chunked-prefill`, `--gpu-memory-utilization 0.92`; precisão FP8 do modelo, se disponível |
+| vLLM (visão) | `--limit-mm-per-prompt image=1` e `--max-model-len` compatível com uma imagem de 1800 px + resposta |
+| LiteLLM | sem `max_parallel_requests`, `rpm` ou `tpm` baixos para a chave do SIG-IPTU; `timeout` ≥ 180 s; um único deployment apontando para a H200 |
+| GPU | `nvidia-smi` durante um lote: utilização perto de 100% indica GPU no limite; baixa indica fila antes dela |
+| Modelo | a 1ª leitura pode usar um modelo menor (`IPTU_BATCH_MODEL=gemma-4-12b-it`); confira a classificação com o gabarito antes de adotar |
+
 ### Desempenho (H200)
 
 - Imagens em JPEG: a compressão PNG custava ~1,4 s de CPU por página digitalizada (JPEG: ~0,05 s).

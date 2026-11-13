@@ -236,14 +236,15 @@ dialog ul { padding-left: 1.1rem; }
   </section>
 
   <section class="charts">
-    <div class="card"><div class="card-head"><h2>Processos analisados por dia</h2><span class="muted">últimos 14 dias · por decisão</span></div>
+    <div class="card"><div class="card-head"><h2>Processos analisados por envio</h2><span class="muted">últimos 14 envios · por decisão</span></div>
       <div class="chart" id="chart-volume"></div>
       <div class="legend" aria-hidden="true">
         <span><span class="icon i-good">✓</span>Aceito</span><span><span class="icon i-critical">✕</span>Não aceito</span>
-        <span><span class="icon i-warning">!</span>Revisão manual</span><span><span class="icon i-neutral">→</span>Fora do fluxo</span></div>
+        <span><span class="icon i-warning">!</span>Revisão manual</span><span><span class="icon i-neutral">→</span>Fora do fluxo</span>
+        <span><span class="icon" style="background:var(--line-strong)">…</span>Em leitura</span></div>
       <details class="data-table"><summary>Ver os dados</summary><div id="table-volume"></div></details>
     </div>
-    <div class="card"><div class="card-head"><h2>Tempo médio de análise por cidadão</h2><span class="muted">últimos 14 dias</span></div>
+    <div class="card"><div class="card-head"><h2>Tempo médio por cidadão em cada envio</h2><span class="muted">últimos 14 envios</span></div>
       <div class="chart" id="chart-tempo"></div>
       <details class="data-table"><summary>Ver os dados</summary><div id="table-tempo"></div></details>
     </div>
@@ -266,7 +267,8 @@ dialog ul { padding-left: 1.1rem; }
       </div>
     </div>
     <div class="card">
-      <div class="card-head"><h2>Lotes enviados</h2><span class="muted" id="lots-config"></span></div>
+      <div class="card-head"><h2>Lotes enviados</h2><span class="muted" id="lots-config"></span>
+        <button type="button" id="capacity" title="Mede quantas páginas por minuto o servidor de IA processa">Testar capacidade da IA</button></div>
       <div class="lots" id="lots"><p class="muted small">Nenhum lote enviado.</p></div>
     </div>
   </section>

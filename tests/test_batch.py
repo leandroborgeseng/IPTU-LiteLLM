@@ -128,3 +128,27 @@ class SeparacaoImediata(unittest.TestCase):
         self.assertNotIn("etapa", state)
         self.assertFalse((path / "upload").exists())
         self.assertEqual(batch.import_lot(path), processes)  # segunda chamada não refaz
+
+
+
+class SegundaPassada(unittest.TestCase):
+    def test_paginas_com_falha_passageira_sao_relidas_com_prazo_longo(self):
+        lot = Path(tempfile.mkdtemp()) / ("9" * 32)
+        (lot / "P").mkdir(parents=True)
+        batch.save(lot / "batch.json", {"status": "processando"})
+        evidence = lot / "P" / ("a" * 32 + "-1.json")
+        batch.save(evidence, {"status": "falha_de_conexao"})
+        ok = lot / "P" / ("a" * 32 + "-2.json")
+        batch.save(ok, {"status": "extraido"})
+        calls = []
+        original = batch.process_page
+        batch.process_page = lambda pdf, number, ev, analyze, ext, slow=False: calls.append((number, slow)) or ({}, 1, False)
+        batch.PAGE_SLOTS = __import__("threading").BoundedSemaphore(2)
+        try:
+            progress = {}
+            batch.second_pass(lot, {"progresso": progress}, progress,
+                              [("P", Path("x.pdf"), 1, evidence, ".pdf"), ("P", Path("x.pdf"), 2, ok, ".pdf")], None, 4)
+        finally:
+            batch.process_page = original
+        self.assertEqual(calls, [(1, True)])
+        self.assertTrue((lot / "P" / "complete.json").exists())

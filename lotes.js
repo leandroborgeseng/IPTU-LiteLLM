@@ -358,8 +358,9 @@ drop.ondrop = async (event) => {
 /* ---------- Painel: indicadores e gráficos ---------- */
 const SVGNS = 'http://www.w3.org/2000/svg';
 const STATUS_FILL = {aceitos: 'var(--good)', nao_aceitos: 'var(--critical)', revisao_manual: 'var(--warning)',
-  fora_do_fluxo: 'var(--neutral)'};
-const STATUS_NAME = {aceitos: 'Aceito', nao_aceitos: 'Não aceito', revisao_manual: 'Revisão manual', fora_do_fluxo: 'Fora do fluxo'};
+  fora_do_fluxo: 'var(--neutral)', processando: 'var(--line-strong)'};
+const STATUS_NAME = {aceitos: 'Aceito', nao_aceitos: 'Não aceito', revisao_manual: 'Revisão manual', fora_do_fluxo: 'Fora do fluxo',
+  processando: 'Em leitura'};
 
 function svg(tag, attrs = {}, ...children) {
   const node = document.createElementNS(SVGNS, tag);
@@ -377,15 +378,6 @@ function seconds(ms) {
   return s < 90 ? s.toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' s'
     : (s / 60).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' min';
 }
-function lastDays(count) {
-  const days = [];
-  for (let i = count - 1; i >= 0; i--) {
-    const d = new Date(); d.setDate(d.getDate() - i);
-    days.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
-  }
-  return days;
-}
-function dayLabel(day) { const [, m, d] = day.split('-'); return d + '/' + m; }
 function niceMax(value) {
   if (value <= 4) return 4;
   const step = Math.pow(10, Math.floor(Math.log10(value)));
@@ -397,14 +389,21 @@ function tooltip(container) {
   return tip;
 }
 
-function drawVolume(serie, days) {
+function lotLabel(lot) {
+  const name = (lot.nome || '').replace(/\.zip$/i, '');
+  return name.length > 12 ? name.slice(0, 11) + '…' : name;
+}
+function lotTitle(lot) {
+  return (lot.nome || '') + (lot.criado_em ? ' · enviado em ' + formatDate(lot.criado_em) : '');
+}
+
+function drawVolume(lots) {
   const box = $('chart-volume');
-  const byDay = Object.fromEntries(serie.map((row) => [row.dia, row]));
-  const rows = days.map((day) => byDay[day] || {dia: day, aceitos: 0, nao_aceitos: 0, revisao_manual: 0, fora_do_fluxo: 0});
-  const keys = ['aceitos', 'nao_aceitos', 'revisao_manual', 'fora_do_fluxo'];
+  const rows = lots;
+  const keys = ['aceitos', 'nao_aceitos', 'revisao_manual', 'fora_do_fluxo', 'processando'];
   const totals = rows.map((row) => keys.reduce((sum, key) => sum + row[key], 0));
   if (!totals.some(Boolean)) {
-    box.replaceChildren(el('div', {class: 'chart-empty'}, 'Nenhum processo analisado nos últimos 14 dias.'));
+    box.replaceChildren(el('div', {class: 'chart-empty'}, 'Nenhum envio analisado ainda.'));
     $('table-volume').replaceChildren();
     return;
   }
@@ -434,16 +433,18 @@ function drawVolume(serie, days) {
         + ` Q${x + barW},${y + gap} ${x + barW},${y + gap + r} V${y + gap + height} Z`;
       chart.append(svg('path', {d, fill: STATUS_FILL[key]}));
     });
-    if (totals[index] && (index === rows.length - 1 || totals[index] === Math.max(...totals))) {
+    if (totals[index] && (index === rows.length - 1 || index === totals.indexOf(Math.max(...totals)))) {
       chart.append(svg('text', {x: x + barW / 2, y: top + plotH - (totals[index] / max) * plotH - 5, 'text-anchor': 'middle',
         'font-size': 11, 'font-weight': 600, fill: 'var(--ink)'}, number(totals[index])));
     }
-    if (index % Math.ceil(rows.length / 7) === 0 || index === rows.length - 1) {
-      chart.append(svg('text', {x: x + barW / 2, y: H - 6, 'text-anchor': 'middle', 'font-size': 11, 'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, dayLabel(row.dia)));
+    const step = Math.ceil(rows.length / 7);
+    const labeled = rows.length <= 8 || index === rows.length - 1 || (index % step === 0 && index < rows.length - step);
+    if (labeled) {
+      chart.append(svg('text', {x: x + barW / 2, y: H - 6, 'text-anchor': 'middle', 'font-size': 11, 'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, lotLabel(row)));
     }
     const hit = svg('rect', {x: left + index * band, y: top, width: band, height: plotH, fill: 'transparent'});
     hit.addEventListener('mouseenter', () => {
-      tip.replaceChildren(el('b', {}, dayLabel(row.dia) + ' · ' + number(totals[index]) + ' processos'),
+      tip.replaceChildren(el('b', {}, lotTitle(row)), el('div', {}, number(totals[index]) + ' processos'),
         ...keys.filter((key) => row[key]).map((key) => el('div', {}, STATUS_NAME[key] + ': ' + number(row[key]))));
       tip.style.left = ((x + barW / 2) / W * 100) + '%';
       tip.style.top = ((top + plotH - (totals[index] / max) * plotH) / H * 190) + 'px';
@@ -454,23 +455,24 @@ function drawVolume(serie, days) {
   });
   box.replaceChildren(chart, tip);
   $('table-volume').replaceChildren(el('table', {},
-    el('thead', {}, el('tr', {}, ...['Dia', 'Aceitos', 'Não aceitos', 'Revisão manual', 'Fora do fluxo'].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...rows.filter((row, i) => totals[i]).map((row) => el('tr', {}, el('td', {}, dayLabel(row.dia)),
+    el('thead', {}, el('tr', {}, ...['Envio', 'Aceitos', 'Não aceitos', 'Revisão manual', 'Fora do fluxo', 'Em leitura'].map((h) => el('th', {}, h)))),
+    el('tbody', {}, ...rows.filter((row, i) => totals[i]).map((row) => el('tr', {}, el('td', {}, lotTitle(row)),
       ...keys.map((key) => el('td', {}, number(row[key]))))))));
 }
 
-function drawTime(serie, days) {
+function drawTime(lots) {
   const box = $('chart-tempo');
-  const byDay = Object.fromEntries(serie.map((row) => [row.dia, row.tempo_medio_ms]));
-  const points = days.map((day, index) => ({day, index, ms: byDay[day]})).filter((p) => p.ms != null);
+  const days = lots;  // um ponto por envio, na ordem de envio
+  const points = lots.map((lot, index) => ({lot, index, ms: lot.tempo_medio_ms})).filter((p) => p.ms != null);
   if (!points.length) {
-    box.replaceChildren(el('div', {class: 'chart-empty'}, 'Sem medições nos últimos 14 dias.'));
+    box.replaceChildren(el('div', {class: 'chart-empty'}, 'Sem medições de tempo ainda.'));
     $('table-tempo').replaceChildren();
     return;
   }
   const W = 480, H = 190, left = 44, bottom = 22, top = 12, right = 12, plotH = H - bottom - top;
   const max = niceMax(Math.max(...points.map((p) => p.ms)) / 1000) * 1000;
-  const xAt = (index) => left + (index / Math.max(1, days.length - 1)) * (W - left - right);
+  const xAt = (index) => days.length === 1 ? left + (W - left - right) / 2
+    : left + (index / Math.max(1, days.length - 1)) * (W - left - right);
   const yAt = (ms) => top + plotH - (ms / max) * plotH;
   const chart = svg('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Tempo médio de análise por cidadão, por dia'});
   for (const tick of [0, max / 2, max]) {
@@ -487,19 +489,20 @@ function drawTime(serie, days) {
   const last = points[points.length - 1];
   chart.append(svg('text', {x: xAt(last.index), y: yAt(last.ms) - 9, 'text-anchor': 'end', 'font-size': 11, 'font-weight': 600,
     fill: 'var(--ink)'}, seconds(last.ms)));
-  for (const index of [0, Math.floor((days.length - 1) / 2), days.length - 1]) {
-    chart.append(svg('text', {x: xAt(index), y: H - 6, 'text-anchor': index ? (index === days.length - 1 ? 'end' : 'middle') : 'start',
-      'font-size': 11, 'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, dayLabel(days[index])));
+  for (const index of [...new Set([0, Math.floor((days.length - 1) / 2), days.length - 1])]) {
+    chart.append(svg('text', {x: xAt(index), y: H - 6, 'text-anchor': days.length === 1 ? 'middle' : index ? (index === days.length - 1 ? 'end' : 'middle') : 'start',
+      'font-size': 11, 'font-family': 'IBM Plex Mono, monospace', fill: 'var(--ink-3)'}, lotLabel(days[index])));
   }
   const tip = tooltip(box);
   const overlay = svg('rect', {x: left, y: top, width: W - left - right, height: plotH, fill: 'transparent'});
   overlay.addEventListener('mousemove', (event) => {
     const rect = overlay.getBoundingClientRect();
     const ratio = (event.clientX - rect.left) / rect.width;
-    const nearest = points.reduce((best, p) => Math.abs(p.index / (days.length - 1) - ratio) < Math.abs(best.index / (days.length - 1) - ratio) ? p : best);
+    const span = Math.max(1, days.length - 1);
+    const nearest = points.reduce((best, p) => Math.abs(p.index / span - ratio) < Math.abs(best.index / span - ratio) ? p : best);
     cross.setAttribute('x1', xAt(nearest.index)); cross.setAttribute('x2', xAt(nearest.index));
     cross.setAttribute('visibility', 'visible');
-    tip.replaceChildren(el('b', {}, dayLabel(nearest.day)), el('div', {}, 'Tempo médio: ' + seconds(nearest.ms)));
+    tip.replaceChildren(el('b', {}, lotTitle(nearest.lot)), el('div', {}, 'Tempo médio por cidadão: ' + seconds(nearest.ms)));
     tip.style.left = (xAt(nearest.index) / W * 100) + '%';
     tip.style.top = (yAt(nearest.ms) / H * 190) + 'px';
     tip.style.display = 'block';
@@ -507,8 +510,8 @@ function drawTime(serie, days) {
   overlay.addEventListener('mouseleave', () => { tip.style.display = 'none'; cross.setAttribute('visibility', 'hidden'); });
   chart.append(overlay);
   box.replaceChildren(chart, tip);
-  $('table-tempo').replaceChildren(el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Dia'), el('th', {}, 'Tempo médio'))),
-    el('tbody', {}, ...points.map((p) => el('tr', {}, el('td', {}, dayLabel(p.day)), el('td', {}, seconds(p.ms)))))));
+  $('table-tempo').replaceChildren(el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Envio'), el('th', {}, 'Tempo médio por cidadão'))),
+    el('tbody', {}, ...points.map((p) => el('tr', {}, el('td', {}, lotTitle(p.lot)), el('td', {}, seconds(p.ms)))))));
 }
 
 async function refreshDashboard() {
@@ -528,9 +531,8 @@ async function refreshDashboard() {
     .filter(Boolean).join(' · ');
   $('k-tempo').textContent = seconds(d.tempo_medio_ms);
   $('k-tempo-sub').textContent = d.ritmo_processos_hora ? 'ritmo: ' + number(d.ritmo_processos_hora) + ' processos/hora' : 'leitura de todas as páginas';
-  const days = lastDays(d.dias);
-  drawVolume(d.serie, days);
-  drawTime(d.serie, days);
+  drawVolume(d.envios || []);
+  drawTime(d.envios || []);
 }
 
 /* ---------- Lotes enviados ---------- */
@@ -960,4 +962,39 @@ async function showDiagnostics(id) {
     document.querySelector('#eval-box h3').textContent = 'Diagnóstico do lote';
     $('eval-box').showModal();
   } catch (error) { alert('Falha ao gerar o diagnóstico: ' + error.message); }
+};
+
+/* ---------- Teste de capacidade da IA ---------- */
+async function showCapacity(state) {
+  const rows = state.resultados || [];
+  const rec = state.recomendacao;
+  const minutes = (pages) => { const m = 2535 / pages; return m < 1 ? 'menos de 1 min' : '≈ ' + number(Math.round(m)) + ' min'; };
+  $('eval-body').replaceChildren(...[
+    el('p', {class: 'small muted'}, 'Mede a 1ª leitura com uma página real (' + (state.amostra || '…') + ') no modelo ' + (state.modelo || '')
+      + '. Rode com o servidor de IA livre: lotes em leitura ao mesmo tempo diminuem o resultado.'),
+    el('table', {}, el('thead', {}, el('tr', {}, ...['Simultâneas', 'Páginas/min', 'Tempo médio', 'Pior caso (p95)', 'Erros'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...rows.map((row) => el('tr', {}, el('td', {}, number(row.simultaneas)), el('td', {}, number(row.paginas_por_minuto)),
+        el('td', {}, row.tempo_medio_s != null ? row.tempo_medio_s.toLocaleString('pt-BR') + ' s' : '—'),
+        el('td', {}, row.tempo_p95_s != null ? row.tempo_p95_s.toLocaleString('pt-BR') + ' s' : '—'),
+        el('td', {}, Object.entries(row.erros || {}).map(([k, v]) => v + ' ' + k).join(', ') || '0'))))),
+    state.status === 'executando' ? el('p', {}, 'Medindo com ' + (state.nivel_atual || '…') + ' chamadas simultâneas…') : null,
+    state.status === 'falha' ? el('p', {}, 'Falha no teste: ' + state.motivo) : null,
+    state.status === 'concluido' ? el('p', {}, rec
+      ? 'Recomendação: IPTU_PAGE_WORKERS=' + rec.IPTU_PAGE_WORKERS + ' (' + number(rec.paginas_por_minuto)
+        + ' páginas/min; ' + minutes(rec.paginas_por_minuto) + ' para a 1ª leitura de um lote de 2.535 páginas).'
+      : 'Nenhum nível rodou sem erros: o servidor de IA está saturado ou com limite de chamadas. Verifique o LiteLLM e o vLLM.') : null,
+  ].filter(Boolean));
+  document.querySelector('#eval-box h3').textContent = 'Capacidade do servidor de IA';
+  if (!$('eval-box').open) $('eval-box').showModal();
+  if (state.status === 'executando') setTimeout(async () => {
+    if ($('eval-box').open) showCapacity(await request('/api/capacidade'));
+  }, 2000);
+}
+$('capacity').onclick = async () => {
+  if (!confirm('O teste envia 240 chamadas ao servidor de IA (8 a 64 simultâneas) e leva alguns minutos. '
+    + 'Lotes em leitura vão disputar o servidor. Continuar?')) return;
+  try {
+    const response = await fetch('/api/capacidade', {method: 'POST'});
+    showCapacity(await response.json());
+  } catch (error) { alert('Não foi possível iniciar o teste: ' + error.message); }
 };

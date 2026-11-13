@@ -285,7 +285,33 @@ def dashboard(lote_id="", dias=14):
         report["serie"].append(entry)
     report["tempo_medio_ms"] = round(timing[0]) if timing[0] is not None else None
     report["dias"] = dias
+    report["envios"] = by_lot(lote_id)
     return report
+
+
+def by_lot(lote_id="", limite=14):
+    """Últimos envios (lotes), em ordem de envio: decisões e tempo médio por cidadão em cada um."""
+    clause, args = _filters(lote_id=lote_id)
+    names = {"deferido": "aceitos", "indeferido": "nao_aceitos", "pendente": "revisao_manual", "fora_do_fluxo": "fora_do_fluxo"}
+    with closing(connect()) as db:
+        lots = db.execute(f"SELECT lote_id, max(lote_nome) AS nome, min(criado_em) AS criado FROM processos {clause} "
+                          f"GROUP BY lote_id ORDER BY criado DESC LIMIT ?", [*args, limite]).fetchall()
+        result = []
+        for lot in reversed(lots):
+            entry = {"lote_id": lot["lote_id"], "nome": lot["nome"], "criado_em": lot["criado"], "aceitos": 0,
+                     "nao_aceitos": 0, "revisao_manual": 0, "fora_do_fluxo": 0, "processando": 0}
+            for decision, result_code, count in db.execute(
+                    "SELECT decisao, resultado, count(*) FROM processos WHERE lote_id=? GROUP BY decisao, resultado",
+                    (lot["lote_id"],)):
+                if result_code == "processando" and decision is None:
+                    entry["processando"] += count
+                elif decision in names:
+                    entry[names[decision]] += count
+            average = db.execute("SELECT avg(tempo_ms) FROM processos WHERE lote_id=? AND tempo_ms IS NOT NULL",
+                                 (lot["lote_id"],)).fetchone()[0]
+            entry["tempo_medio_ms"] = round(average) if average is not None else None
+            result.append(entry)
+    return result
 
 
 def find_by_sei(sei):

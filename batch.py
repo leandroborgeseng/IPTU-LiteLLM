@@ -488,7 +488,10 @@ def page_workers():
         return 32
 
 
-def process_page(pdf, number, evidence, analyze, extension=".pdf"):
+TRANSIENT_STATUSES = {"falha_de_conexao", "erro_http", "falha_de_leitura"}
+
+
+def process_page(pdf, number, evidence, analyze, extension=".pdf", slow=False):
     check_reset()
     if extension in HTML_EXTENSIONS:
         # Documento nativo do SEI: o texto já é exato, sem OCR nem modelo.
@@ -524,7 +527,7 @@ def process_page(pdf, number, evidence, analyze, extension=".pdf"):
             check_reset()
         stage = "renderizacao_ms"
         started = time.monotonic()
-        image = render_page(pdf, number, extension, size=1600)
+        image = render_page(pdf, number, extension, size=1280)  # só classificar: imagem menor
         if image is not None:
             timing[stage] = round((time.monotonic() - started) * 1000)
             check_reset()
@@ -535,7 +538,7 @@ def process_page(pdf, number, evidence, analyze, extension=".pdf"):
             attempts += 1
             # Alta resolução colorida só é gerada se a página precisar de leitura detalhada.
             hires = lambda: render_page(pdf, number, extension, size=1800, gray=False, jpeg=True)  # noqa: E731
-            result = analyze(image, texts, hires=hires)
+            result = analyze(image, texts, hires=hires, slow=slow)
     except ResetRequested:
         raise
     except (OSError, subprocess.TimeoutExpired):
@@ -591,6 +594,38 @@ def request_rerun(path, process_id=None):
             (path / ".rodar_novamente").touch()
         WAKE.set()
         return 202, describe(path)
+
+
+def jobs_job_args(jobs, retry):
+    return [jobs[job] for job in retry]
+
+
+def second_pass(path, state, progress, failed, analyze, workers):
+    """Relê, com prazo longo, as páginas que falharam por instabilidade do servidor de IA."""
+    pending = []
+    for key, pdf, number, evidence, extension in failed:
+        try:
+            if load(evidence).get("status") in TRANSIENT_STATUSES:
+                pending.append((key, pdf, number, evidence, extension))
+        except (OSError, ValueError):
+            pending.append((key, pdf, number, evidence, extension))
+    if not pending:
+        return
+    progress["segunda_passada"] = len(pending)
+    save(path / "batch.json", state)
+    def slotted(*job):
+        with PAGE_SLOTS:
+            return process_page(*job, slow=True)
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(pending)))) as pool:
+        for job in as_completed([pool.submit(slotted, pdf, number, evidence, analyze, extension)
+                                 for _, pdf, number, evidence, extension in pending]):
+            job.result()
+            progress["segunda_passada"] -= 1
+            progress["atualizado_em"] = time.time()
+            save(path / "batch.json", state)
+    progress.pop("segunda_passada", None)
+    for key in {item[0] for item in pending}:  # o parecer do processo é refeito com as páginas relidas
+        save(path / key / "complete.json", {"concluido": True})
 
 
 def process_batch(path, analyze):
@@ -664,11 +699,14 @@ def process_batch(path, analyze):
             def slotted(*job):
                 with PAGE_SLOTS:
                     return process_page(*job)
-            jobs = {pool.submit(slotted, pdf, number, evidence, analyze, extension): key
+            jobs = {pool.submit(slotted, pdf, number, evidence, analyze, extension): (key, pdf, number, evidence, extension)
                     for key, items in jobs_by_process.items()
                     for pdf, number, evidence, extension in items}
+            retry = []
             for job in as_completed(jobs):
                 timing, attempts, failed = job.result()
+                if failed:
+                    retry.append(job)
                 performance = state["desempenho"]
                 performance["paginas_processadas"] += 1
                 performance["paginas_com_falha"] += int(failed)
@@ -680,13 +718,14 @@ def process_batch(path, analyze):
                     stats["paginas"] += 1
                 progress["paginas_concluidas"] += 1
                 progress["atualizado_em"] = time.time()  # mostra no painel se a leitura parou
-                key = jobs[job]
+                key = jobs[job][0]
                 remaining[key] -= 1
                 if not remaining[key]:
                     save(path / key / "complete.json", {"concluido": True})
                 save(path / "batch.json", state)
         finally:
             pool.shutdown(wait=True, cancel_futures=True)
+        second_pass(path, state, progress, jobs_job_args(jobs, retry), analyze, workers)
     state.pop("progresso", None)
     state["status"] = "concluido"
     state["desempenho"]["duracao_ms"] = round((time.monotonic() - batch_started) * 1000)

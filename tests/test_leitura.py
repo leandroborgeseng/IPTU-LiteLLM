@@ -68,7 +68,7 @@ class DetailPage(unittest.TestCase):
     def fake(self, replies):
         """replies: lista na ordem m1, m2…; cada modelo recebe a sua resposta (as chamadas podem ser paralelas)."""
         by_model = {f"m{index + 1}": reply for index, reply in enumerate(replies)}
-        def ask(model, prompt, png, max_tokens=2048, timeout=60):
+        def ask(model, prompt, png, *args, **kwargs):
             self.calls.append(model)
             return by_model[model]
         app.ask_json = ask
@@ -180,12 +180,21 @@ class ChamadasAoModelo(unittest.TestCase):
         self.assertTrue(app.image_url(b"\xff\xd8\xff\xe0abc").startswith("data:image/jpeg;base64,"))
         self.assertTrue(app.image_url(b"\x89PNG....").startswith("data:image/png;base64,"))
 
-    def test_extrato_completo_dispensa_leitura_detalhada(self):
-        app.ask_json = lambda *a, **k: self.fail("não deveria chamar o modelo")
-        result = app.detail_page("m", "v", {"status": "extraido", "tipo": "beneficio", "obtido": {
-            "renda_bruta_centavos": 162100, "competencia_renda": "2026-03", "titular_renda": "X",
-            "numero_beneficio": "1"}}, hires=lambda: b"img")
-        self.assertEqual(result["leitura_detalhada"]["status"], "dispensada")
+    def test_extrato_sempre_tem_leitura_detalhada(self):
+        calls = []
+        app.ask_json = lambda model, *a, **k: calls.append(model) or ("extraido", {"renda_bruta_centavos": 162100})
+        result = app.detail_page("m", "v", {"status": "extraido", "tipo": "beneficio", "obtido": {}}, hires=lambda: b"img")
+        self.assertEqual((calls, result["obtido"]["renda_bruta_centavos"]), (["m"], 162100))
+
+    def test_falha_passageira_na_leitura_detalhada_devolve_a_pagina_para_a_fila(self):
+        app.ask_json = lambda *a, **k: ("falha_de_conexao", None)
+        result = app.detail_page("m", "v", {"status": "extraido", "tipo": "requerimento", "obtido": {}}, hires=lambda: b"img")
+        self.assertEqual(result["status"], "falha_de_conexao")
+
+    def test_primeira_leitura_e_curta(self):
+        prompt = app.classify_prompt()
+        self.assertIn("até cerca de 300 caracteres", prompt)
+        self.assertNotIn("renda_bruta_centavos", prompt)
 
 
 class FormularioPeloTexto(unittest.TestCase):
