@@ -810,15 +810,40 @@ function refreshAll() {
 }
 
 /* ---------- Detalhe do processo ---------- */
-function show(fileId, page = 1) {
-  if (!fileId) return;
+let viewerPages = [];
+let viewerIndex = -1;
+let detailRequest = 0;
+
+function showAt(index) {
+  const entry = viewerPages[index];
+  if (!entry) return;
+  const {fileId, page, pagesInFile} = entry;
   const base = api + '/' + detailBatch + '/pdf/' + fileId;
+  viewerIndex = index;
   $('files').value = fileId;
+  $('viewer-error').hidden = true;
+  $('viewer').hidden = false;
   $('viewer').src = base + '/' + page;
-  $('page-label').textContent = 'página ' + page;
+  $('page-label').textContent = 'Página ' + page + ' de ' + pagesInFile + ' do arquivo';
+  $('viewer-page').value = index + 1;
+  $('viewer-total').textContent = 'de ' + viewerPages.length;
+  $('viewer-prev').disabled = index === 0;
+  $('viewer-next').disabled = index === viewerPages.length - 1;
   $('original').href = base;
   $('original').hidden = false;
 }
+
+function show(fileId, page = 1) {
+  showAt(viewerPages.findIndex((entry) => entry.fileId === fileId && entry.page === page));
+}
+
+$('viewer-prev').onclick = () => showAt(viewerIndex - 1);
+$('viewer-next').onclick = () => showAt(viewerIndex + 1);
+$('viewer-jump').onsubmit = (event) => {
+  event.preventDefault();
+  showAt(Number($('viewer-page').value) - 1);
+};
+$('viewer').onerror = () => { $('viewer-error').hidden = false; };
 
 function pageButtons(sources) {
   const seen = new Set();
@@ -854,10 +879,13 @@ function renderDecision(detail) {
 }
 
 async function openProcess(lote, id) {
-  detailBatch = lote;
-  currentProcess = id;
+  const requestId = ++detailRequest;
+  const previous = detailBatch === lote && currentProcess === id ? viewerPages[viewerIndex] : null;
   const path = api + '/' + lote + '/processos/' + id;
   const detail = await request(path);
+  if (requestId !== detailRequest) return;
+  detailBatch = lote;
+  currentProcess = id;
   detailData = detail;
   const report = detail.parecer;
   $('detail').classList.add('on');
@@ -876,14 +904,32 @@ async function openProcess(lote, id) {
       el('span', {class: 'm'}, row.motivo), pageButtons(row.evidencias)))));
   $('opinion').textContent = report.parecer_texto;
   $('json').href = path + '/exportar';
-  const files = detail.arquivos.filter((doc) => doc.id);
+  const savedPages = new Map();
+  for (const row of detail.paginas) {
+    savedPages.set(row.arquivo, Math.max(savedPages.get(row.arquivo) || 0, row.pagina));
+  }
+  const files = detail.arquivos.filter((doc) => doc.id)
+    .map((doc) => ({...doc, pageCount: doc.paginas ?? savedPages.get(doc.id) ?? 0}))
+    .filter((doc) => doc.pageCount > 0);
+  viewerPages = files.flatMap((doc) => Array.from({length: doc.pageCount}, (_, index) =>
+    ({fileId: doc.id, page: index + 1, pagesInFile: doc.pageCount})));
+  viewerIndex = -1;
+  $('viewer-navigation').hidden = !viewerPages.length;
+  $('viewer-page').max = viewerPages.length;
+  $('viewer-error').hidden = true;
+  $('viewer').hidden = true;
+  $('viewer').removeAttribute('src');
+  $('original').hidden = true;
+  $('page-label').textContent = viewerPages.length ? '' : 'Nenhuma página disponível.';
   $('files').replaceChildren(...files.map((doc) => el('option', {value: doc.id}, doc.origem)));
   $('page-list').replaceChildren(...detail.paginas.map((row) => el('li', {},
     el('button', {class: 'link', type: 'button', onclick: () => show(row.arquivo, row.pagina)},
       row.origem.split('/').pop() + ' · p. ' + row.pagina),
     ' — ' + (row.tipo || row.status) + (row.continuacao_requerimento ? ' (continuação)' : ''))));
+  if (previous) show(previous.fileId, previous.page);
   const first = detail.requerimentos[0] || detail.paginas[0];
-  if (first) show(first.arquivo, first.pagina); else if (files[0]) show(files[0].id);
+  if (viewerIndex < 0 && first) show(first.arquivo, first.pagina);
+  if (viewerIndex < 0) showAt(0);
   const form = $('notes');
   form.reset();
   form.hidden = detail.status !== 'em_revisao';

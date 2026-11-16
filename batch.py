@@ -860,6 +860,7 @@ def process_detail(path, process_id):
         if not meta.exists():
             continue
         counts = load(meta)
+        item["paginas"] = counts["paginas"]
         if not counts["paginas"]:
             item["erro"] = "pdf_inacessivel"
         if counts["total"] > counts["paginas"]:

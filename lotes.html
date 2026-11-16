@@ -190,7 +190,11 @@ td.actions button { font-size: .78rem; padding: .25rem .55rem; margin-left: .25r
 #viewer-box { position: sticky; top: 4.6rem; }
 #viewer { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-height: 12rem; }
 #viewer-bar { display: flex; gap: .5rem; align-items: center; margin-bottom: .6rem; flex-wrap: wrap; font-size: .82rem; }
-#viewer-bar select { flex: 1; max-width: 100%; }
+#viewer-bar select { flex: 1; min-width: 0; max-width: 100%; }
+#viewer-navigation, #viewer-jump { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+#viewer-navigation { margin-bottom: .6rem; }
+#viewer-page { width: 5rem; }
+#viewer[hidden], #viewer-navigation[hidden] { display: none; }
 details > summary { cursor: pointer; color: var(--brand-2); font-weight: 500; }
 #notes label { display: block; margin: .45rem 0; font-size: .84rem; color: var(--ink-2); }
 #notes input, #notes textarea { width: 100%; margin-top: .15rem; }
@@ -398,6 +402,16 @@ footer.admin button { font-size: .8rem; }
         <section class="card">
           <div id="viewer-bar"><select id="files" aria-label="Documento"></select><span id="page-label"></span>
             <a id="original" hidden>Baixar original</a></div>
+          <div id="viewer-navigation" role="group" aria-label="Navegação pelo processo">
+            <button id="viewer-prev" type="button">Anterior</button>
+            <form id="viewer-jump">
+              <label>Página do processo <input id="viewer-page" type="number" min="1" step="1" required></label>
+              <button type="submit">Ir</button>
+            </form>
+            <span id="viewer-total" role="status"></span>
+            <button id="viewer-next" type="button">Próxima</button>
+          </div>
+          <p id="viewer-error" role="status" hidden>Prévia indisponível para esta página.</p>
           <img id="viewer" alt="Página do documento">
         </section>
       </div>
