@@ -1209,6 +1209,16 @@ if __name__ == "__main__":
         report = avaliacao.evaluate(batch.batch_dir(sys.argv[2]), json.loads(Path(sys.argv[3]).read_text()))
         print(json.dumps(report, ensure_ascii=False, indent=2))
         sys.exit(0)
+    if sys.argv[1:2] == ["importar-imoveis"]:
+        if len(sys.argv) not in {3, 4} or (len(sys.argv) == 4 and sys.argv[3] != "--completa"):
+            sys.exit("Uso: python app.py importar-imoveis <arquivo.csv> [--completa]")
+        try:
+            count = sil.import_properties(Path(sys.argv[2]), batch.ROOT / "sil-imoveis.db",
+                                          complete=len(sys.argv) == 4)
+        except (OSError, ValueError) as error:
+            sys.exit(f"Carga recusada: {error}")
+        print(f"Carga concluída: {count} vínculos CPF–inscrição.")
+        sys.exit(0)
     if sys.argv[1:] == ["sil"]:
         result = sil.check()
         print(json.dumps(result, ensure_ascii=False))

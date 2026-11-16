@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -904,14 +905,15 @@ def process_detail(path, process_id):
 
 def registry_lookup(folder, process):
     """Consulta a SIL uma vez por processo e guarda o resultado (24 h; erros, 10 min)."""
-    if not sil.configured():
+    database = ROOT / "sil-imoveis.db"
+    if not sil.configured() and not database.is_file():
         return None
     def values(field):
         return sorted({row["obtido"][field] for row in process["requerimentos"]
                        if isinstance(row.get("obtido", {}).get(field), str)})
     registrations = values("inscricao_imobiliaria")
     cpfs = values("cpf_requerente") + values("cpf_conjuge")
-    key = [registrations, cpfs]
+    key = [registrations, cpfs, property_load_stamp()]
     cache = folder / "sil.json"
     if cache.exists():
         saved = load(cache)
@@ -919,7 +921,12 @@ def registry_lookup(folder, process):
         failed = any(name.startswith("erro") for name in saved["dados"])
         if saved.get("chave") == key and age < (600 if failed else 86400):
             return saved["dados"]
-    data = sil.lookup(registrations[0] if len(registrations) == 1 else None, cpfs)
+    data = (sil.lookup(registrations[0] if len(registrations) == 1 else None, cpfs)
+            if sil.configured() else {"consultado_em": int(time.time())})
+    try:
+        data["imoveis_por_cpf"] = sil.local_properties(database, cpfs)
+    except (OSError, ValueError, sqlite3.Error):
+        data["erro_imoveis_por_cpf"] = "carga_local_indisponivel"
     save(cache, {"chave": key, "dados": data})
     return data
 
@@ -1012,12 +1019,19 @@ def diagnostics(path):
 RULES_VERSION = hashlib.sha256(Path(parecer.__file__).read_bytes()).hexdigest()[:12]
 
 
+def property_load_stamp():
+    try:
+        return (ROOT / "sil-imoveis.db").stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
 def process_signature(path, process_id):
     """Muda quando o parecer pode ter mudado: leitura concluída, conferência, consulta SIL ou regras."""
     folder = path / process_id
     stamps = [(folder / name).stat().st_mtime_ns if (folder / name).exists() else None
               for name in ("complete.json", "review.json", "sil.json")]
-    return historico.signature(stamps, RULES_VERSION)
+    return historico.signature(stamps, RULES_VERSION, property_load_stamp())
 
 
 def export_document(path, detail):

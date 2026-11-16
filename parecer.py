@@ -14,6 +14,8 @@ import os
 import re
 import unicodedata
 
+from sil import normalize_cpf, normalize_registration
+
 # Parâmetros do exercício (variáveis de ambiente; padrão: exercício 2027, salário mínimo de R$ 1.621,00).
 EXERCICIO = int(os.environ.get("IPTU_EXERCICIO", "2027"))
 SALARIO_MINIMO_CENTAVOS = int(os.environ.get("IPTU_SALARIO_MINIMO_CENTAVOS", "162100"))
@@ -485,8 +487,27 @@ def assess(process, review, cadastro=None):
             + (". Nos documentos: " + "; ".join(notes) if notes else "") + ".",
             deed_sources + facts.get("inscricao_imobiliaria", []))
     if flag("possui_outro_imovel") is not True and not confirmed.get("imovel"):
-        add("unicidade", "cadastral", "Conferir no Cadastro Imobiliário se o CPF do requerente tem um único "
-            "imóvel e o do cônjuge nenhum (a API da SIL ainda não consulta imóveis por CPF).")
+        property_lookup = cadastro.get("imoveis_por_cpf") or {}
+        by_cpf = property_lookup.get("por_cpf", {})
+        lookup_cpf = normalize_cpf(unique("cpf_requerente"))
+        spouse_cpf = normalize_cpf(unique("cpf_conjuge"))
+        registration_key = normalize_registration(registration)
+        applicant_properties = set(by_cpf.get(lookup_cpf, []))
+        spouse_properties = set(by_cpf.get(spouse_cpf, []))
+        other_properties = (applicant_properties | spouse_properties) - {registration_key}
+        source = [{"referencia_conferencia": "Carga local do Cadastro Imobiliário da SIL",
+                   "carregada_em": property_lookup.get("carregada_em"),
+                   "inscricoes_requerente": sorted(applicant_properties),
+                   "inscricoes_conjuge": sorted(spouse_properties)}]
+        if registration_key and other_properties:
+            add("unicidade", "pendente", "A carga local encontrou outras inscrições. Confira os vínculos e se há unidade anexa.", source)
+        elif (property_lookup.get("cobertura_completa") and registration_key
+              and lookup_cpf in by_cpf and applicant_properties == {registration_key}
+              and (no_spouse or spouse_cpf in by_cpf)):
+            add("unicidade", "atendido", "A carga completa da SIL confirma apenas a inscrição do pedido para os CPFs aplicáveis.", source)
+        else:
+            add("unicidade", "cadastral", "Conferir os imóveis por CPF na SIL. A carga local ou os dados identificados não confirmam a unicidade.",
+                source if property_lookup else None)
 
     activity = cadastro.get("mobiliario")
     if confirmation("mobiliario"):

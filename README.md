@@ -397,3 +397,26 @@ Fotos JPG, JPEG, PNG e WebP podem ser enviadas diretamente ou dentro da pasta
 de um processo no ZIP. Cada foto é tratada como uma página, com o original
 disponível para download. Para incluir fotos de um ZIP já importado, envie
 o ZIP novamente.
+
+### Carga do Cadastro Imobiliário da SIL para busca por CPF
+
+Obtenha da SIL uma exportação com uma linha por vínculo entre CPF e inscrição
+imobiliária. Use CSV UTF-8 com cabeçalhos `cpf` e `inscricao_imobiliaria`,
+separados por ponto e vírgula ou vírgula. Preserve os zeros à esquerda.
+Copie a exportação para um caminho privado acessível ao container e execute
+no terminal do serviço do painel:
+
+```sh
+python app.py importar-imoveis /data/imoveis.csv
+```
+
+Acrescente `--completa` somente para uma exportação conferida que abranja todos
+os vínculos aplicáveis. A carga incompleta sinaliza inscrições encontradas
+para revisão. A carga completa pode confirmar a unicidade se a inscrição
+do pedido e os CPFs aplicáveis estiverem identificados. Inscrições adicionais,
+inclusive possíveis unidades anexas, são encaminhadas para conferência.
+
+O comando substitui atomicamente a carga anterior em `/data/sil-imoveis.db`
+após validar todo o arquivo. O painel detecta a nova carga e recalcula o
+histórico sem reler os PDFs. A consulta por inscrição e o Cadastro Mobiliário
+continuam usando a API da SIL quando configurada.
