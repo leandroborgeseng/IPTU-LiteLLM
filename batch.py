@@ -489,7 +489,8 @@ def page_workers():
         return 32
 
 
-TRANSIENT_STATUSES = {"falha_de_conexao", "erro_http", "falha_de_leitura"}
+FORMAT_FAILURES = {"resposta_truncada", "json_invalido", "esquema_invalido", "resposta_sem_conteudo"}
+TRANSIENT_STATUSES = {"falha_de_conexao", "erro_http", "falha_de_leitura"} | FORMAT_FAILURES
 
 
 def process_page(pdf, number, evidence, analyze, extension=".pdf", slow=False):
@@ -793,7 +794,60 @@ def run_importer():
 
 
 AUTO_QUEUE = ".releitura-regras"
-AUTO_DONE = ".releitura-regras-v11.json"
+AUTO_DONE = ".releitura-regras-v12.json"
+AUTO_PROGRESS = ".releitura-progresso.json"
+WORKER_HEARTBEAT = ".worker-heartbeat.json"
+HEARTBEAT_MAX_AGE = 20
+READ_PROGRESS_MAX_AGE = 15 * 60
+
+
+def read_progress(path):
+    try:
+        return load(path)
+    except (OSError, ValueError):
+        return {}
+
+
+def rule_read_overview(lote_id=""):
+    """Lê o estado persistido pelo worker, inclusive quando ele está em outro container."""
+    now = time.time()
+    heartbeat = read_progress(ROOT / WORKER_HEARTBEAT)
+    worker = now - (heartbeat.get("atualizado_em") or 0) < HEARTBEAT_MAX_AGE
+    rows = []
+    for queue in ROOT.glob(f"*/{AUTO_QUEUE}"):
+        lot = queue.parent
+        if lote_id and lot.name != lote_id:
+            continue
+        pending = {task.stem for task in queue.glob("*.json")}
+        progress = read_progress(lot / AUTO_PROGRESS)
+        if not pending and not progress:
+            continue
+        state = read_progress(lot / "batch.json")
+        current = progress.get("atual")
+        if current and (current["processo_id"] not in pending or not worker
+                        or progress.get("worker_id") != heartbeat.get("id")
+                        or state.get("status") != "concluido"):
+            current = None
+        if not pending:
+            status = "concluida"
+        elif not worker:
+            status = "sem_worker"
+        elif not current:
+            status = "aguardando"
+        elif now - progress["atualizado_em"] >= READ_PROGRESS_MAX_AGE:
+            status = "sem_progresso"
+        else:
+            status = "rodando"
+        rows.append({
+            "lote_id": lot.name, "lote_nome": state.get("nome") or lot.name[:8],
+            "status": status, "aguardando": len(pending) - int(current is not None),
+            "atual": current, "atualizado_em": progress.get("atualizado_em"),
+            "processos_concluidos": progress.get("processos_concluidos", 0),
+            "paginas_atualizadas": progress.get("paginas_atualizadas", 0),
+            "paginas_com_falha": progress.get("paginas_com_falha", 0),
+        })
+    rows.sort(key=lambda row: (row["status"] == "concluida", -(row["atualizado_em"] or 0), row["lote_nome"]))
+    return {"worker_ativo": worker, "worker_atualizado_em": heartbeat.get("atualizado_em"), "lotes": rows}
 
 
 def schedule_rule_reads(path, detail):
@@ -823,15 +877,24 @@ def schedule_rule_reads(path, detail):
         if row.get("versao_extracao", 0) < PAGE_SCHEMA:
             targets.append({"arquivo": row["arquivo"], "pagina": row["pagina"],
                             "origem": row["origem"], "tipo": row["tipo"]})
+    failures = {(row["arquivo"], row["pagina"]): row for row in detail["paginas"]
+                if row.get("status") in FORMAT_FAILURES}
+    targets = [target for target in targets
+               if (target["arquivo"], target["pagina"]) not in failures]
+    targets.extend({"arquivo": row["arquivo"], "pagina": row["pagina"],
+                    "origem": row["origem"], "falha_formato": True} for row in failures.values())
     if targets:
         queued.parent.mkdir(exist_ok=True)
         save(queued, targets)
         WAKE.set()
 
 
-def run_rule_reads(meta, analyze):
+def run_rule_reads(meta, analyze, worker_id=None):
     path = meta.parent
     queue = path / AUTO_QUEUE
+    progress_file = path / AUTO_PROGRESS
+    progress = read_progress(progress_file)
+    progress.update(worker_id=worker_id, atual=None)
     for task in sorted(queue.glob("*.json")):
         check_reset()
         if load(meta)["status"] != "concluido":
@@ -843,20 +906,33 @@ def run_rule_reads(meta, analyze):
             continue
         errors = 0
         updated = 0
-        for target in load(task):
+        targets = load(task)
+        for index, target in enumerate(targets, 1):
             check_reset()
             key, number = target["arquivo"], target["pagina"]
             evidence = folder / f"{key}-{number}.json"
-            if not evidence.is_file() or load(evidence).get("versao_extracao", 0) >= PAGE_SCHEMA:
+            if not evidence.is_file():
+                continue
+            previous = load(evidence)
+            retry_format = target.get("falha_formato", False)
+            if retry_format:
+                if previous.get("status") not in FORMAT_FAILURES:
+                    continue
+            elif previous.get("versao_extracao", 0) >= PAGE_SCHEMA:
                 continue
             # Mantém a leitura anterior disponível até a nova leitura passar na validação.
             staging = queue / f"{key}-{number}.staged"
             extension = PurePosixPath(target["origem"]).suffix.lower()
+            progress.update(atualizado_em=time.time(), atual={
+                "processo_id": task.stem, "pagina": number, "ordem": index, "total_paginas": len(targets),
+                "motivo": "falha_formato" if retry_format else "regras_atualizadas",
+            })
+            save(progress_file, progress)
             try:
                 with PAGE_SLOTS:
                     _, _, failed = process_page(path / "files" / key, number, staging, analyze, extension, slow=True)
                 result = load(staging)
-                accepted = (result.get("tipo") == target["tipo"] or
+                accepted = (retry_format or result.get("tipo") == target["tipo"] or
                             (target["tipo"] == "requerimento" and result.get("tipo_sugerido") == "requerimento"))
                 if failed or not accepted:
                     errors += 1
@@ -872,6 +948,13 @@ def run_rule_reads(meta, analyze):
                 staging.unlink(missing_ok=True)
         save(folder / AUTO_DONE, {"paginas_atualizadas": updated, "falhas": errors})
         task.unlink(missing_ok=True)
+        progress.update(
+            atual=None, atualizado_em=time.time(),
+            processos_concluidos=progress.get("processos_concluidos", 0) + 1,
+            paginas_atualizadas=progress.get("paginas_atualizadas", 0) + updated,
+            paginas_com_falha=progress.get("paginas_com_falha", 0) + errors,
+        )
+        save(progress_file, progress)
         print(f"Releitura de regras {path.name[:8]}/{folder.name[:8]}: {updated} atualizadas, {errors} falhas.", flush=True)
 
 
@@ -883,13 +966,15 @@ def run_worker(analyze):
           f"até {max_parallel_lots()} lote(s) ao mesmo tempo.", flush=True)
     Thread(target=run_importer, daemon=True).start()
     active = {}
+    worker_id = uuid.uuid4().hex
+    last_heartbeat = None
 
     def run_lot(meta):
         targeted = False
         try:
             targeted = load(meta)["status"] == "concluido"
             if targeted:
-                run_rule_reads(meta, analyze)
+                run_rule_reads(meta, analyze, worker_id)
             else:
                 process_batch(meta.parent, analyze)
         except ResetRequested:
@@ -901,6 +986,10 @@ def run_worker(analyze):
                 mark_failed(meta, exc)
 
     while True:
+        now = time.monotonic()
+        if last_heartbeat is None or now - last_heartbeat >= 5:
+            save(ROOT / WORKER_HEARTBEAT, {"id": worker_id, "atualizado_em": time.time()})
+            last_heartbeat = now
         WAKE.clear()
         active = {name: thread for name, thread in active.items() if thread.is_alive()}
         if reset_pending():
@@ -1016,12 +1105,21 @@ def registry_lookup(folder, process):
         failed = any(name.startswith("erro") for name in saved["dados"])
         if saved.get("chave") == key and age < (600 if failed else 86400):
             return saved["dados"]
-    data = (sil.lookup(registrations[0] if len(registrations) == 1 else None, cpfs)
-            if sil.configured() else {"consultado_em": int(time.time())})
+    registration = registrations[0] if len(registrations) == 1 else None
+    data = {"consultado_em": int(time.time())}
     try:
-        data["imoveis_por_cpf"] = sil.local_properties(database, cpfs)
+        local = sil.local_properties(database, cpfs, registration)
     except (OSError, ValueError, sqlite3.Error):
+        local = None
         data["erro_imoveis_por_cpf"] = "carga_local_indisponivel"
+    if local and local.get("cadastro_detalhado"):
+        if local.get("imovel"):
+            data["imovel"] = local["imovel"]
+    elif sil.configured() and not database.is_file():
+        data.update(sil.lookup(registration, cpfs))
+    elif local and sil.configured():
+        data.update(sil.lookup(registration, cpfs))  # CSV antigo contém apenas vínculos.
+    data["imoveis_por_cpf"] = local
     save(cache, {"chave": key, "dados": data})
     return data
 
@@ -1266,9 +1364,9 @@ def delete_process(path, process_id):
         return 200, {"status": "excluido", "processo": item["processo"]}
 
 
-def throughput(lote_id=""):
-    """Processos por hora de leitura, a partir da duração registrada de cada lote."""
-    processes = seconds = 0
+def reading_rate(lote_id=""):
+    """Ritmo e tempo efetivo por processo, ponderados pelo volume dos lotes concluídos."""
+    processes = elapsed_ms = 0
     for meta in ROOT.glob("*/batch.json"):
         if lote_id and meta.parent.name != lote_id:
             continue
@@ -1280,8 +1378,11 @@ def throughput(lote_id=""):
         duration = (state.get("desempenho") or {}).get("duracao_ms") or 0
         if state.get("status") == "concluido" and duration > 0 and manifest:
             processes += len(manifest)
-            seconds += duration / 1000
-    return round(processes / (seconds / 3600), 1) if seconds else None
+            elapsed_ms += duration
+    return {
+        "ritmo_processos_hora": round(processes * 3_600_000 / elapsed_ms, 1) if processes else None,
+        "tempo_efetivo_processo_ms": round(elapsed_ms / processes) if processes else None,
+    }
 
 
 def lots_overview():

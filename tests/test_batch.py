@@ -6,6 +6,8 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from threading import BoundedSemaphore
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 try:
@@ -152,3 +154,90 @@ class SegundaPassada(unittest.TestCase):
             batch.process_page = original
         self.assertEqual(calls, [(1, True)])
         self.assertTrue((lot / "P" / "complete.json").exists())
+
+
+class ReleituraDeFormato(unittest.TestCase):
+    def test_releitura_de_lote_concluido_troca_so_falha_recuperada(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lot = Path(directory)
+            folder = lot / "processo"
+            folder.mkdir()
+            batch.save(folder / "complete.json", {"concluido": True})
+            meta = lot / "batch.json"
+            batch.save(meta, {"status": "concluido"})
+            key = "a" * 32
+            statuses = ["resposta_truncada", "json_invalido", "extraido"]
+            pages = []
+            for number, status in enumerate(statuses, 1):
+                result = {"status": status, "versao_extracao": batch.PAGE_SCHEMA,
+                          "tipo": None if number < 3 else "requerimento"}
+                batch.save(folder / f"{key}-{number}.json", result)
+                pages.append({**result, "arquivo": key, "pagina": number, "origem": "documento.pdf"})
+            detail = {"id": folder.name, "status": "em_revisao", "paginas": pages, "requerimentos": [],
+                      "parecer": {"resultado": "em_analise", "fatos_do_requerimento": {},
+                                  "criterios": [], "resumo": {"requerente": None}, "modalidade": None}}
+            batch.schedule_rule_reads(lot, detail)
+
+            def reread(pdf, number, staging, analyze, extension, slow=False):
+                self.assertTrue(slow)
+                failed = number == 2
+                batch.save(staging, {"status": "resposta_sem_conteudo" if failed else "extraido",
+                                     "tipo": "beneficio"})
+                return {}, 1, failed
+
+            with (patch.object(batch, "PAGE_SLOTS", BoundedSemaphore(1)),
+                  patch.object(batch, "process_page", side_effect=reread) as process):
+                batch.run_rule_reads(meta, None)
+                self.assertEqual([call.args[1] for call in process.call_args_list], [1, 2])
+            self.assertEqual(batch.load(folder / f"{key}-1.json")["tipo"], "beneficio")
+            self.assertEqual(batch.load(folder / f"{key}-2.json")["status"], "json_invalido")
+            self.assertEqual(batch.load(folder / f"{key}-3.json")["tipo"], "requerimento")
+            self.assertEqual(batch.load(folder / batch.AUTO_DONE), {"paginas_atualizadas": 1, "falhas": 1})
+            batch.schedule_rule_reads(lot, detail)
+            self.assertFalse((lot / batch.AUTO_QUEUE / (folder.name + ".json")).exists())
+
+
+    def test_status_distingue_fila_worker_e_pagina_sem_movimentacao(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lot = root / ("c" * 32)
+            queue = lot / batch.AUTO_QUEUE
+            queue.mkdir(parents=True)
+            batch.save(lot / "batch.json", {"status": "concluido", "nome": "Lote teste"})
+            task = queue / "processo.json"
+            batch.save(task, [])
+            with patch.object(batch, "ROOT", root), patch.object(batch.time, "time", return_value=1200):
+                self.assertEqual(batch.rule_read_overview()["lotes"][0]["status"], "sem_worker")
+                batch.save(root / batch.WORKER_HEARTBEAT, {"id": "worker-novo", "atualizado_em": 1199})
+                progress = {"worker_id": "worker-antigo", "atual": {"processo_id": "processo"},
+                            "atualizado_em": 1199, "processos_concluidos": 2}
+                batch.save(lot / batch.AUTO_PROGRESS, progress)
+                self.assertEqual(batch.rule_read_overview()["lotes"][0]["status"], "aguardando")
+                progress["worker_id"] = "worker-novo"
+                batch.save(lot / batch.AUTO_PROGRESS, progress)
+                self.assertEqual(batch.rule_read_overview()["lotes"][0]["status"], "rodando")
+                progress["atualizado_em"] = 200
+                batch.save(lot / batch.AUTO_PROGRESS, progress)
+                self.assertEqual(batch.rule_read_overview()["lotes"][0]["status"], "sem_progresso")
+                task.unlink()
+                row = batch.rule_read_overview()["lotes"][0]
+                self.assertEqual((row["status"], row["aguardando"], row["processos_concluidos"]),
+                                 ("concluida", 0, 2))
+                self.assertEqual(batch.rule_read_overview("outro-lote")["lotes"], [])
+
+
+class TempoEfetivo(unittest.TestCase):
+    def test_usa_duracao_concluida_e_divide_pelos_processos_do_lote(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(batch, "ROOT", Path(directory)):
+            for key, status, duration, count in (
+                ("L1", "concluido", 6_000_000, 150),
+                ("L2", "concluido", 3_000_000, 100),
+                ("L3", "processando", 1_000_000, 100),
+            ):
+                lot = batch.ROOT / key
+                lot.mkdir()
+                batch.save(lot / "batch.json", {"status": status, "desempenho": {"duracao_ms": duration}})
+                batch.save(lot / "manifest.json", [{}] * count)
+            self.assertEqual(batch.reading_rate(), {"ritmo_processos_hora": 100.0, "tempo_efetivo_processo_ms": 36_000})
+            self.assertEqual(batch.reading_rate("L1"), {"ritmo_processos_hora": 90.0, "tempo_efetivo_processo_ms": 40_000})
+            self.assertIsNone(batch.reading_rate("L3")["tempo_efetivo_processo_ms"])

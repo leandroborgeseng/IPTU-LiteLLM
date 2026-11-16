@@ -530,8 +530,94 @@ function drawLine(boxId, tableId, lots, spec) {
       ...spec.columns.map(([, cell]) => el('td', {}, cell(p.lot))))))));
 }
 
+function showSilLoad(load) {
+  const labels = load ? [
+    'Carga de ' + formatDate(load.carregada_em),
+    load.inscricoes == null ? '' : number(load.inscricoes) + ' inscrições',
+    number(load.vinculos_cpf) + ' vínculos com CPF válido',
+    load.cadastro_detalhado ? 'Consulta imobiliária na base local' : '',
+  ] : ['Nenhuma carga importada.'];
+  $('sil-cadastro-status').textContent = labels.filter(Boolean).join(' · ');
+}
+
+$('sil-cadastro').ontoggle = async () => {
+  if (!$('sil-cadastro').open) return;
+  try {
+    showSilLoad((await request('/api/cadastro-sil')).carga);
+  } catch (error) {
+    $('sil-cadastro-status').textContent = 'Falha ao consultar a carga · ' + error.message;
+  }
+};
+
+$('sil-cadastro-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const input = $('sil-cadastro-arquivo');
+  const message = $('sil-cadastro-mensagem');
+  const button = event.currentTarget.querySelector('button');
+  const file = input.files[0];
+  if (!file) return;
+  input.disabled = button.disabled = true;
+  message.textContent = 'Enviando e validando o CSV…';
+  try {
+    const result = await request('/api/cadastro-sil', {method: 'POST', body: file,
+      headers: {'Content-Type': 'text/csv'}});
+    showSilLoad(result.carga);
+    input.value = '';
+    message.textContent = 'Cadastro importado. A atualização dos pareceres usa as leituras já salvas.';
+    await refreshDashboard();
+  } catch (error) {
+    message.textContent = 'Falha na atualização · ' + error.message;
+  } finally {
+    input.disabled = button.disabled = false;
+  }
+};
+
+function renderRereadQueue(queue) {
+  const lastWorker = formatDate(queue.worker_atualizado_em);
+  $('releitura-worker').textContent = queue.worker_ativo ? 'Worker ativo'
+    : lastWorker ? 'Sem sinal do worker · último sinal em ' + lastWorker : 'Aguardando sinal do worker';
+  const waiting = queue.lotes.reduce((total, lot) => total + lot.aguardando, 0);
+  const reading = queue.lotes.filter((lot) => lot.status === 'rodando').length;
+  const stalled = queue.lotes.filter((lot) => lot.status === 'sem_progresso').length;
+  const finished = queue.lotes.reduce((total, lot) => total + lot.processos_concluidos, 0);
+  const summary = [number(waiting) + ' aguardando', number(reading) + ' em releitura',
+    stalled ? number(stalled) + ' sem progresso recente' : '',
+    number(finished) + ' com releitura encerrada'].filter(Boolean).join(' · ');
+  const status = queue.lotes.length ? summary : 'Fila vazia.';
+  if ($('releitura-resumo').textContent !== status) $('releitura-resumo').textContent = status;
+  const labels = {rodando: 'Em releitura', aguardando: 'Aguardando vez', sem_worker: 'Aguardando worker',
+    sem_progresso: 'Sem progresso recente', concluida: 'Fila concluída'};
+  const rows = queue.lotes.map((lot) => {
+    const current = lot.atual;
+    return el('div', {class: 'lot'},
+      el('div', {}, el('strong', {}, lot.lote_nome), ' · ' + labels[lot.status],
+        el('div', {class: 'small muted'}, number(lot.aguardando) + ' aguardando · '
+          + number(lot.paginas_atualizadas) + ' páginas atualizadas · '
+          + number(lot.paginas_com_falha) + ' páginas com falha'),
+        current ? el('div', {class: 'small'}, 'Página ' + current.pagina + ' · alvo '
+          + current.ordem + ' de ' + current.total_paginas + ' · '
+          + (current.motivo === 'falha_formato' ? 'falha de formato' : 'regras atualizadas') + ' · ',
+          el('button', {class: 'link', type: 'button', onclick: () =>
+            openProcess(lot.lote_id, current.processo_id).catch((error) => {
+              $('releitura-worker').textContent = error.message;
+            })}, 'Abrir processo')) : null,
+        lot.atualizado_em ? el('div', {class: 'small muted'},
+          'Última movimentação em ' + formatDate(lot.atualizado_em)) : null));
+  });
+  $('releitura-lotes').replaceChildren(...rows);
+}
+
 async function refreshDashboard() {
-  const d = await request('/api/painel?' + new URLSearchParams(currentBatch ? {lote: currentBatch} : {}));
+  const batch = currentBatch;
+  let d;
+  try {
+    d = await request('/api/painel?' + new URLSearchParams(batch ? {lote: batch} : {}));
+  } catch (error) {
+    $('releitura-worker').textContent = 'Não foi possível atualizar a fila';
+    throw error;
+  }
+  if (currentBatch !== batch) return;
+  renderRereadQueue(d.fila_releitura);
   const pct = (value) => d.processados ? Math.round(100 * value / d.processados) + '%' : '';
   const recalc = d.recalculando;
   $('recalc').hidden = !recalc;
@@ -556,19 +642,19 @@ async function refreshDashboard() {
   $('k-tokens').textContent = compact(tokens);
   $('k-tokens-sub').textContent = compact(d.tokens_entrada || 0) + ' lidos · ' + compact(d.tokens_saida || 0) + ' gerados'
     + (d.tokens_por_processo ? ' · ' + compact(d.tokens_por_processo) + ' por cidadão' : '');
-  $('k-tempo').textContent = seconds(d.tempo_medio_ms);
-  $('k-tempo-sub').textContent = 'soma das páginas, lidas em paralelo' + (d.ritmo_processos_hora
-    ? ' · ritmo real ' + number(d.ritmo_processos_hora) + ' processos/hora' : '');
+  $('k-tempo').textContent = seconds(d.tempo_efetivo_processo_ms);
+  $('k-tempo-sub').textContent = d.tempo_efetivo_processo_ms == null ? 'Aguardando medição de lotes concluídos'
+    : 'Média nos lotes concluídos · ' + number(d.ritmo_processos_hora) + ' processos/hora';
   const hours = d.paginas * (d.minutos_manuais_por_pagina || 1) / 60;
   $('k-paginas').textContent = number(d.paginas);
   $('k-paginas-sub').textContent = '≈ ' + number(Math.round(hours)) + ' h de leitura manual (est. '
     + number(d.minutos_manuais_por_pagina || 1) + ' min/página)';
   drawVolume(d.envios || []);
   drawLine('chart-tempo', 'table-tempo', d.envios || [], {
-    value: (lot) => lot.tempo_medio_ms, format: seconds, label: 'Tempo de IA por cidadão em cada envio',
+    value: (lot) => lot.tempo_medio_ms, format: seconds, label: 'Tempo acumulado de leitura por processo em cada envio',
     axisMax: (value) => niceMax(value / 1000) * 1000, empty: 'Sem medições de tempo ainda.',
-    tooltip: (lot) => [el('div', {}, 'Tempo de IA por cidadão: ' + seconds(lot.tempo_medio_ms))],
-    columns: [['Tempo de IA por cidadão', (lot) => seconds(lot.tempo_medio_ms)]]});
+    tooltip: (lot) => [el('div', {}, 'Tempo acumulado por processo: ' + seconds(lot.tempo_medio_ms))],
+    columns: [['Tempo acumulado por processo', (lot) => seconds(lot.tempo_medio_ms)]]});
   drawLine('chart-tokens', 'table-tokens', d.envios || [], {
     value: (lot) => lot.tokens, format: compact, label: 'Tokens de IA usados em cada envio', axisMax: niceMax,
     empty: 'Sem registro de tokens ainda (conta a partir dos envios lidos na versão atual).',
@@ -669,6 +755,34 @@ function formatDate(value) {
   return value ? new Date(value * 1000).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}) : '';
 }
 
+let opinionGroupRequest = 0;
+async function refreshOpinionGroups() {
+  if (!$('pareceres-lote').open) return;
+  const requestId = ++opinionGroupRequest;
+  const params = new URLSearchParams({lote: currentBatch});
+  $('pareceres-lote-csv').href = '/api/processos/pareceres-lote.csv?' + params;
+  $('pareceres-lote-status').textContent = 'Carregando grupos…';
+  $('pareceres-lote-grupos').replaceChildren();
+  try {
+    const data = await request('/api/processos/pareceres-lote?' + params);
+    if (requestId !== opinionGroupRequest) return;
+    $('pareceres-lote-status').textContent = number(data.total) + ' processos · '
+      + number(data.tipos.length) + ' tipos de parecer';
+    $('pareceres-lote-grupos').replaceChildren(...data.tipos.map((group) => {
+      const criteria = group.criterios.map((key) =>
+        key === 'justificativa_humana' ? 'Justificativa registrada' : (LABEL[key] || key));
+      return el('li', {}, el('strong', {}, group.tipo + ' · ' + number(group.total) + ' processos'),
+        el('span', {class: 'small muted'}, ' · ' + [group.situacao, group.exercicio, group.modalidade,
+          ...criteria].filter(Boolean).join(' · ')));
+    }));
+  } catch (error) {
+    if (requestId === opinionGroupRequest) $('pareceres-lote-status').textContent = error.message;
+  }
+}
+
+$('pareceres-lote').ontoggle = refreshOpinionGroups;
+$('pareceres-lote-atualizar').onclick = refreshOpinionGroups;
+
 async function refreshPendingGroups() {
   if (!$('pendencias').open) return;
   const batch = currentBatch;
@@ -677,6 +791,7 @@ async function refreshPendingGroups() {
   if (currentBatch !== batch || !$('pendencias').open) return;
   $('pendencias-total').textContent = number(data.total) +
     ' em revisão manual. Um pedido pode aparecer em mais de um grupo.';
+  $('pendencias-csv').href = '/api/processos/pendencias.csv?' + params;
   $('pendencias-grupos').replaceChildren(...data.grupos.map((group) => {
     const filter = 'pendencia:' + group.id;
     const active = view.filtro === filter;
@@ -806,7 +921,8 @@ async function rerunLot(id) {
 $('reanalisar').onclick = () => rerunLot(currentBatch);
 
 function refreshAll() {
-  return Promise.all([refreshDashboard(), refreshLots(), refreshTable(), refreshLotActions(), refreshTracked()]);
+  return Promise.all([refreshDashboard(), refreshLots(), refreshTable(), refreshLotActions(), refreshTracked(),
+    refreshOpinionGroups()]);
 }
 
 /* ---------- Detalhe do processo ---------- */
@@ -858,6 +974,39 @@ function pageButtons(sources) {
     el('button', {type: 'button', onclick: () => show(source.arquivo, source.pagina)}, 'p. ' + source.pagina)));
 }
 
+function criterionDetails(row) {
+  const items = [];
+  for (const source of row.componentes_renda || []) {
+    const value = source.valor;
+    const role = source.papel === 'conjuge' ? 'Cônjuge' : 'Requerente';
+    const details = [role, value.titular_renda, money(value.renda_bruta_centavos),
+      value.competencia_renda, value.descricao || (value.tipo === 'declarado' ? 'declarado' : ''),
+      value.fonte_numero_beneficio === 'texto_da_pagina' ? 'NB recuperado do texto' : ''].filter(Boolean);
+    items.push(el('li', {}, details.join(' · '), pageButtons([source])));
+  }
+  for (const source of row.comprovantes_divergentes || []) {
+    const value = source.valor;
+    items.push(el('li', {}, ['Valor em conferência', value.titular_renda,
+      money(value.renda_bruta_centavos), value.competencia_renda].filter(Boolean).join(' · '),
+      pageButtons([source])));
+  }
+  for (const gap of row.lacunas || []) items.push(el('li', {}, 'Conferir ' + gap));
+  for (const benefit of row.beneficios_pendentes || []) {
+    if (benefit.tem_extrato_em_outra_competencia) {
+      items.push(el('li', {}, 'Benefício ' + benefit.numero + ' tem extrato em outra competência.'));
+    }
+  }
+  if (row.criterio === 'dupla_leitura') {
+    const display = (value) => value == null || value === '' ? 'sem resposta'
+      : typeof value === 'boolean' ? (value ? 'Sim' : 'Não') : String(value);
+    for (const source of row.evidencias) {
+      items.push(el('li', {}, source.campo + ' · '
+        + display(source.primeira_leitura) + ' / ' + display(source.segunda_leitura), pageButtons([source])));
+    }
+  }
+  return items.length ? el('ul', {class: 'small'}, ...items) : null;
+}
+
 function renderDecision(detail) {
   const report = detail.parecer;
   const ai = detail.status === 'em_revisao' ? AI_TO_DECISION[report.resultado] : 'processando';
@@ -901,7 +1050,7 @@ async function openProcess(lote, id) {
   $('criteria').replaceChildren(...report.criterios.map((row) => el('li', {},
     el('span', {class: 'icon ' + (MARK_CLASS[row.status] || 'i-neutral'), title: row.status, 'aria-hidden': 'true'}, MARK[row.status] || '·'),
     el('div', {}, el('strong', {}, LABEL[row.criterio] || row.criterio),
-      el('span', {class: 'm'}, row.motivo), pageButtons(row.evidencias)))));
+      el('span', {class: 'm'}, row.motivo), pageButtons(row.evidencias), criterionDetails(row)))));
   $('opinion').textContent = report.parecer_texto;
   $('json').href = path + '/exportar';
   const savedPages = new Map();

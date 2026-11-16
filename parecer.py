@@ -108,6 +108,22 @@ def page_text(row):
     return " ".join(fold(row.get(key) or "") for key in ("texto_ocr", "texto_pdf"))
 
 
+NUMERO_ROTULADO_BENEFICIO = re.compile(
+    r"\b(?:(?:n[.o°]+|numero)[ \t]*(?:do[ \t]+)?beneficio|nb)"
+    r"[ \t]*[:#]?[ \t]*(?:\r?\n[ \t]*)?"
+    r"([0-9]{10}|[0-9]{9}-[0-9]|[0-9]{3}\.[0-9]{3}\.[0-9]{3}-[0-9])(?![0-9]|[.-][0-9])"
+)
+
+
+def numero_beneficio_no_texto(row):
+    matches = {
+        digits(number)
+        for key in ("texto_ocr", "texto_pdf")
+        for number in NUMERO_ROTULADO_BENEFICIO.findall(fold(row.get(key)))
+    }
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
 def evidence(row, value):
     return {"arquivo": row["arquivo"], "origem": row["origem"], "pagina": row["pagina"], "valor": value}
 
@@ -119,8 +135,8 @@ def where(rows):
 def assess(process, review, cadastro=None):
     rules = []
 
-    def add(key, status, reason, sources=None):
-        rules.append({"criterio": key, "status": status, "motivo": reason, "evidencias": sources or []})
+    def add(key, status, reason, sources=None, **details):
+        rules.append({"criterio": key, "status": status, "motivo": reason, "evidencias": sources or [], **details})
 
     forms = process["requerimentos"]
     pages = process["paginas"]
@@ -131,7 +147,13 @@ def assess(process, review, cadastro=None):
     for row in forms:
         skip = set(row.get("divergencias") or [])
         for field in sorted(skip):
-            doubtful.append(evidence(row, field))
+            details = (row.get("leitura_detalhada") or {}).get("respostas") or {}
+            doubtful.append({
+                **evidence(row, field),
+                "campo": CAMPOS.get(field, field),
+                "primeira_leitura": (row.get("obtido") or {}).get(field),
+                "segunda_leitura": details.get(field),
+            })
         for field, value in row.get("obtido", {}).items():
             if field in skip:
                 continue
@@ -179,20 +201,36 @@ def assess(process, review, cadastro=None):
             if row["status"] == "extraido" and kind in kinds:
                 support[key].append(source)
 
-    income = []
-    for row in readable:
-        data = row.get("obtido", {})
-        if row.get("tipo") in {"beneficio", "holerite"} and type(data.get("renda_bruta_centavos")) is int:
-            income.append(evidence(row, {key: data.get(key) for key in (
-                "renda_bruta_centavos", "competencia_renda", "titular_renda",
-                "numero_beneficio", "especie_beneficio",
-            )} | {"tipo": row["tipo"]}))
-
     applicant = unique("nome_requerente")
     applicant_key = person_key(applicant)
     applicant_cpf = digits(unique("cpf_requerente"))
     spouse = unique("nome_conjuge")
     spouse_key = person_key(spouse)
+    declared = {kind: digits(unique(f"beneficio_{kind}_numero")) for kind in BENEFICIOS_DECLARADOS}
+    declared = {kind: number for kind, number in declared.items() if number}
+    spouse_number = digits(unique("conjuge_beneficio_numero"))
+
+    income = []
+    for row in readable:
+        data = row.get("obtido", {})
+        if row.get("tipo") not in {"beneficio", "holerite"} or type(data.get("renda_bruta_centavos")) is not int:
+            continue
+        values = {key: data.get(key) for key in (
+            "renda_bruta_centavos", "competencia_renda", "titular_renda",
+            "numero_beneficio", "especie_beneficio",
+        )} | {"tipo": row["tipo"]}
+        if row["tipo"] == "beneficio" and not values["numero_beneficio"]:
+            holder = values["titular_renda"]
+            is_applicant = same_person(holder, applicant)
+            is_spouse = same_person(holder, spouse)
+            if is_applicant != is_spouse:
+                number = numero_beneficio_no_texto(row)
+                matches_applicant = is_applicant and number in declared.values() and number != spouse_number
+                matches_spouse = is_spouse and number == spouse_number and number not in declared.values()
+                if number and (matches_applicant or matches_spouse):
+                    values["numero_beneficio"] = number
+                    values["fonte_numero_beneficio"] = "texto_da_pagina"
+        income.append(evidence(row, values))
 
     # Modalidade e condição para propor indeferimento.
     read_exercise = unique("exercicio")
@@ -236,10 +274,15 @@ def assess(process, review, cadastro=None):
             facts.get("exercicio"))
     if modalities & SOCIAIS:
         add("modalidade", "pendente", "Modalidade PCD ou doença grave: encaminhar à assistência social.",
-            facts.get("modalidade_criterio"))
+            facts.get("modalidade_criterio"), codigo="assistencia_social")
     elif not eligible_modality:
-        add("modalidade", "pendente", "Modalidade do pedido ausente, divergente ou fora do fluxo.",
-            facts.get("modalidade_criterio"))
+        if not modality_sources:
+            code, explanation = "nao_identificada", "Modalidade do pedido não identificada no requerimento."
+        elif len({frozenset(modality_parts(item["valor"])) for item in modality_sources}) > 1:
+            code, explanation = "divergente", "Marcações divergentes sobre a modalidade do pedido."
+        else:
+            code, explanation = "fora_do_fluxo", "Modalidade do pedido não reconhecida no fluxo automático."
+        add("modalidade", "pendente", explanation, modality_sources, codigo=code)
     else:
         add("modalidade", "atendido", "Modalidade elegível: " + modality_label(modality) + ".",
             modality_sources)
@@ -247,12 +290,22 @@ def assess(process, review, cadastro=None):
     # Identidade: CPF ou nome do requerimento conferem com documento de identificação.
     if not confirmation("identidade"):
         ids = [row for row in readable if row.get("tipo") in {"identidade", "cpf"}]
-        by_cpf = [row for row in ids if applicant_cpf and (
-            digits((row.get("obtido") or {}).get("cpf_documento")) == applicant_cpf
-            or applicant_cpf in digits(page_text(row)))]
-        by_name = [row for row in ids if applicant_key and (
-            person_key((row.get("obtido") or {}).get("nome_documento")) == applicant_key
-            or applicant_key in person_key(page_text(row)))]
+        by_cpf, by_name = [], []
+        for row in ids:
+            document = row.get("obtido") or {}
+            document_cpf = digits(document.get("cpf_documento"))
+            if applicant_cpf and document_cpf:
+                if document_cpf == applicant_cpf:
+                    by_cpf.append(row)
+                continue
+            text = page_text(row)
+            if applicant_cpf and applicant_cpf in digits(text):
+                by_cpf.append(row)
+            elif applicant_key and (
+                person_key(document.get("nome_documento")) == applicant_key
+                or applicant_key in person_key(text)
+            ):
+                by_name.append(row)
         matched = by_cpf or by_name
         if matched:
             how = "CPF" if by_cpf else "nome"
@@ -260,17 +313,15 @@ def assess(process, review, cadastro=None):
                 f"Documento de identificação ({where(matched)}) confere com o {how} do requerimento.",
                 [evidence(row, row.get("tipo")) for row in matched])
         elif not ids:
-            add("identidade", "pendente", "Nenhum documento de identificação do requerente foi localizado.")
+            add("identidade", "pendente", "Nenhum documento de identificação do requerente foi localizado.",
+                codigo="documento_nao_localizado")
         else:
             add("identidade", "pendente",
                 "Os documentos de identificação não conferem com o nome ou CPF do requerimento.",
-                [evidence(row, row.get("tipo")) for row in ids])
+                [evidence(row, row.get("tipo")) for row in ids], codigo="dados_divergentes")
 
     # Benefício: os benefícios declarados têm extrato em nome do requerente.
     # O número do benefício declarado liga o extrato à pessoa mesmo com nome abreviado.
-    declared = {kind: digits(unique(f"beneficio_{kind}_numero")) for kind in BENEFICIOS_DECLARADOS}
-    declared = {kind: number for kind, number in declared.items() if number}
-    spouse_number = digits(unique("conjuge_beneficio_numero"))
     owner = {}
     for item in income:
         number = digits(item["valor"].get("numero_beneficio"))
@@ -287,7 +338,8 @@ def assess(process, review, cadastro=None):
             owner[id(item)] = "requerente"
         else:
             owner[id(item)] = "terceiro"
-    applicant_income = [item for item in income if owner[id(item)] == "requerente"]
+    applicant_income = [item for item in income if owner[id(item)] == "requerente"
+                        and item["valor"]["tipo"] == "beneficio"]
     if applicant_income:
         latest = max(item["valor"].get("competencia_renda") or "" for item in applicant_income)
         applicant_income = [item for item in applicant_income
@@ -296,13 +348,22 @@ def assess(process, review, cadastro=None):
     missing = {kind: number for kind, number in declared.items() if number not in found_numbers}
     benefit_ok = False
     if not confirmation("beneficio"):
-        if not applicant_income:
-            add("beneficio", "pendente", "Nenhum extrato de benefício em nome do requerente foi localizado.",
-                income)
+        benefit_pages = [row for row in readable if row.get("tipo") == "beneficio"]
+        if not benefit_pages:
+            add("beneficio", "pendente", "Nenhum extrato de benefício foi localizado.",
+                codigo="extrato_nao_localizado")
+        elif not applicant_income:
+            add("beneficio", "pendente", "Extrato(s) localizado(s) sem renda bruta legível ou vínculo com o requerente.",
+                [evidence(row, row.get("tipo")) for row in benefit_pages], codigo="extrato_sem_vinculo_ou_valor")
         elif missing:
-            add("beneficio", "pendente", "Benefício declarado sem extrato no processo: "
+            older_numbers = {digits(item["valor"].get("numero_beneficio")) for item in income
+                             if owner[id(item)] == "requerente" and item["valor"]["tipo"] == "beneficio"}
+            add("beneficio", "pendente", "Benefício declarado sem extrato correspondente na competência conferida: "
                 + ", ".join(f"{kind} nº {number}" for kind, number in missing.items()) + ".",
-                applicant_income)
+                [evidence(row, row.get("tipo")) for row in benefit_pages],
+                codigo="beneficio_sem_extrato_na_competencia",
+                beneficios_pendentes=[{"tipo": kind, "numero": number, "tem_extrato_em_outra_competencia":
+                                       number in older_numbers} for kind, number in missing.items()])
         else:
             benefit_ok = True
             add("beneficio", "atendido",
@@ -317,8 +378,12 @@ def assess(process, review, cadastro=None):
     has_spouse = bool(spouse_key) or marital.startswith(("casad", "uniao", "companheir"))
     no_spouse = not spouse_key and (marital in SEM_CONJUGE or flag("conjuge_informado") is False)
     gaps, extra, extra_sources = [], 0, []
+    conflicting_income = (estimate or {}).get("divergencias", [])
+    if conflicting_income:
+        gaps.append("valores brutos divergentes para o mesmo benefício na mesma competência")
     if not (has_spouse or no_spouse):
         gaps.append("estado civil ou cônjuge não identificado no requerimento")
+    declared_components = []
     renewal_without_spouse_income = False
     if has_spouse:
         spouse_income = [item for item in (estimate or {}).get("comprovantes", [])
@@ -326,7 +391,11 @@ def assess(process, review, cadastro=None):
         declared_spouse = unique("conjuge_renda_centavos")
         if not spouse_income and type(declared_spouse) is int:
             extra += declared_spouse
-            extra_sources += facts.get("conjuge_renda_centavos", [])
+            sources = facts["conjuge_renda_centavos"]
+            extra_sources += sources
+            declared_components.append({**sources[0], "papel": "conjuge",
+                                        "valor": {"renda_bruta_centavos": declared_spouse,
+                                                  "titular_renda": spouse, "tipo": "declarado"}})
         elif not spouse_income and facts.get("conjuge_renda_centavos"):
             gaps.append("valores declarados de renda do cônjuge divergentes")
         elif not spouse_income:
@@ -343,7 +412,11 @@ def assess(process, review, cadastro=None):
         amount = unique(value_field)
         if answer is True and type(amount) is int:
             extra += amount
-            extra_sources += facts.get(value_field, [])
+            sources = facts[value_field]
+            extra_sources += sources
+            declared_components.append({**sources[0], "papel": "requerente",
+                                        "valor": {"renda_bruta_centavos": amount, "titular_renda": applicant,
+                                                  "tipo": "declarado", "descricao": label}})
         elif answer is True:
             gaps.append(label + " declarada sem valor")
         elif answer is None and field == "outras_rendas" and not (
@@ -371,23 +444,28 @@ def assess(process, review, cadastro=None):
         total = estimate["total_centavos"] + extra
         parts = (f"{len(estimate['comprovantes'])} comprovante(s) distinto(s) da competência "
                  f"{estimate['competencia']}" + (f" + {money(extra)} declarados" if extra else ""))
-        sources = estimate["comprovantes"] + extra_sources
+        sources = estimate["comprovantes"] + extra_sources + conflicting_income
+        components = [
+            {**item, "papel": owner[id(item)]} for item in estimate["comprovantes"]
+        ] + declared_components
+        detail = {"componentes_renda": components, "lacunas": gaps,
+                  "comprovantes_divergentes": conflicting_income}
         if total > TETO_CENTAVOS and ordinary:
             # Faltar algum componente só aumentaria a soma: o teto já foi ultrapassado.
             add("renda", "impedimento", f"Renda bruta familiar de {money(total)} ({parts}) acima do teto "
-                f"de {money(TETO_CENTAVOS)}.", sources)
+                f"de {money(TETO_CENTAVOS)}.", sources, **detail)
         elif gaps:
             add("renda", "pendente", f"Comprovantes somam {money(total)} ({parts}), mas falta: "
-                + "; ".join(gaps) + ".", sources)
+                + "; ".join(gaps) + ".", sources, **detail)
             total = None
         else:
             add("renda", "atendido", f"Renda bruta familiar de {money(total)} ({parts}) dentro do teto "
                 f"de {money(TETO_CENTAVOS)} (até 2 salários mínimos)."
                 + (" Renda do cônjuge não apresentada em pedido de renovação."
-                   if renewal_without_spouse_income else ""), sources)
+                   if renewal_without_spouse_income else ""), sources, **detail)
     else:
         add("renda", "pendente", "Nenhum comprovante de renda legível. Confira a renda familiar e "
-            "registre o total bruto mensal com a fonte.")
+            "registre o total bruto mensal com a fonte.", income, lacunas=gaps)
 
     # Residência.
     residence = unique("reside_no_imovel")
@@ -410,7 +488,9 @@ def assess(process, review, cadastro=None):
     if True in (rented, commercial, shop):
         add("edícula", "impedimento" if ordinary else "pendente",
             "Edícula alugada ou imóvel com ponto comercial (LC 456/2025).",
-            [item for item in sources_of(*annex) if item["valor"] is True])
+            [item for item in sources_of(*annex) if item["valor"] is True],
+            codigo="+".join(key for key, value in (("aluguel", rented), ("uso_comercial", commercial),
+                                                   ("ponto_comercial", shop)) if value is True))
     elif not confirmation("edícula"):
         if has is False:
             add("edícula", "atendido", "O requerimento declara que o imóvel não possui edícula.",
@@ -433,8 +513,20 @@ def assess(process, review, cadastro=None):
             add("edícula", "pendente", "Edícula habitada por quem não é ascendente/descendente. "
                 "Confira o vínculo e se há cobrança de aluguel.", sources_of(*annex))
         else:
+            missing_fields = []
+            if has is None:
+                missing_fields.append("existência de edícula")
+            if has:
+                if rented is None:
+                    missing_fields.append("aluguel")
+                if commercial is None:
+                    missing_fields.append("uso comercial")
+                if inhabited is None and family is not True:
+                    missing_fields.append("ocupação")
+                if inhabited is not False and family is None:
+                    missing_fields.append("parentesco do ocupante")
             add("edícula", "pendente", "Respostas sobre edícula incompletas no requerimento.",
-                sources_of(*annex))
+                sources_of(*annex), lacunas=missing_fields)
 
     # Imóvel: documentos de vínculo, consulta à SIL pela inscrição e unicidade.
     cadastro = cadastro or {}
@@ -481,7 +573,10 @@ def assess(process, review, cadastro=None):
         if declared_address and street:
             address_ok = street in person_key(declared_address) and (
                 not sil_numbers or bool(sil_numbers & set(re.findall(r"\b\d{1,6}\b", declared_address))))
-        sil_source = [{"referencia_conferencia": f"SIL · inscrição {registration}"}]
+        local_property = prop.get("fonte_local")
+        sil_source = [{"referencia_conferencia": (
+            f"Cadastro local SIL · inscrição {registration}" if local_property else f"SIL · inscrição {registration}"
+        )}]
         if applicant_cpf in cpfs or (not applicant_cpf and applicant_key in names):
             if situation and situation != "ativo":
                 add("imovel", "pendente", f"Imóvel com situação '{situation}' na SIL.", sil_source)
@@ -493,6 +588,9 @@ def assess(process, review, cadastro=None):
                 add("imovel", "atendido", "SIL confirma o requerente como responsável pelo imóvel"
                     + (f" ({role})" if role else "") + (" e o endereço declarado." if address_ok else "."),
                     sil_source + deed_sources)
+        elif local_property:
+            add("imovel", "cadastral", "A inscrição consta na carga local, mas a responsabilidade do requerente "
+                "precisa de conferência.", sil_source + deed_sources)
         elif mentions:
             add("imovel", "pendente", "O CPF do requerente não consta entre os responsáveis na SIL, mas há "
                 "documento de vínculo no processo: " + "; ".join(notes) + ". Atualizar o cadastro ou conferir.",
@@ -644,13 +742,14 @@ def income_estimate(income):
     """Soma comprovantes distintos da competência mais recente (já filtrados por titular).
 
     Dois comprovantes com o mesmo número de benefício, ou sem número e com mesmo
-    valor e titular, contam uma vez. Meses anteriores ficam de fora.
+    valor e titular, contam uma vez. Valores conflitantes no mesmo benefício
+    ficam pendentes de conferência. Meses anteriores ficam de fora.
     """
     rows = [item for item in income if item["valor"].get("competencia_renda")]
     if not rows:
         return None
     latest = max(item["valor"]["competencia_renda"] for item in rows)
-    seen, used = set(), []
+    by_key = {}
     for item in rows:
         data = item["valor"]
         if data["competencia_renda"] != latest:
@@ -658,14 +757,15 @@ def income_estimate(income):
         number = digits(data.get("numero_beneficio"))
         key = ("beneficio", number) if number else (
             "valor", data["renda_bruta_centavos"], person_key(data.get("titular_renda")))
-        if key in seen:
-            continue
-        seen.add(key)
-        used.append(item)
-    if not used:
-        return None
+        by_key.setdefault(key, []).append(item)
+    used, conflicts = [], []
+    for items in by_key.values():
+        if len({item["valor"]["renda_bruta_centavos"] for item in items}) == 1:
+            used.append(items[0])
+        else:
+            conflicts.extend(items)
     return {"total_centavos": sum(item["valor"]["renda_bruta_centavos"] for item in used),
-            "competencia": latest, "comprovantes": used}
+            "competencia": latest, "comprovantes": used, "divergencias": conflicts}
 
 
 CAMPOS = {

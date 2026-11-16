@@ -9,6 +9,7 @@ import re
 import socket
 import shutil
 import ssl
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,8 @@ VISION_MODELS = ("gemma-4-12b-it", "qwen3.8-27b", "qwen3.8-27b-fast")
 VISION_CASES = {"sim": True, "em_branco": None}
 MAX_PDF_BYTES = 10 * 1024 * 1024
 PDF_SLOTS = BoundedSemaphore(2)
+SIL_IMPORT_SLOT = BoundedSemaphore(1)
+SIL_IMPORT_MAX_BYTES = 256 * 1024 * 1024
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
@@ -717,6 +720,8 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                 self.handle_integration()
             elif urlsplit(self.path).path.startswith(("/api/processos", "/api/auditoria", "/api/painel", "/api/lotes-estado", "/api/capacidade")):
                 self.handle_history()
+            elif urlsplit(self.path).path == "/api/cadastro-sil":
+                self.handle_sil_import()
             elif self.path == "/pdf.js":
                 self.send_data(200, "text/javascript; charset=utf-8", PDF_SCRIPT.encode())
             else:
@@ -731,6 +736,8 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
             self.handle_batches()
         elif urlsplit(self.path).path in {"/api/capacidade", "/api/sistema/zerar"}:
             self.handle_history()
+        elif urlsplit(self.path).path == "/api/cadastro-sil":
+            self.handle_sil_import()
         elif urlsplit(self.path).path == "/pdf":
             self.handle_pdf()
         elif self.path == "/verificar":
@@ -750,9 +757,11 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
         else:
             self.send_error(404)
 
-    def send_data(self, code, media_type, body):
+    def send_data(self, code, media_type, body, filename=None):
         self.send_response(code)
         self.send_header("Content-Type", media_type)
+        if filename:
+            self.send_header("Content-Disposition", f"attachment; filename={filename}")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -767,6 +776,50 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
             return base64.b64decode(credential).decode().partition(":")[0] if scheme.lower() == "basic" else None
         except (ValueError, UnicodeError, binascii.Error):
             return None
+
+    def handle_sil_import(self):
+        database = batch.ROOT / "sil-imoveis.db"
+        if self.command == "GET":
+            try:
+                self.send_json(200, {"carga": sil.load_status(database)})
+            except (OSError, ValueError, sqlite3.Error):
+                self.send_json(503, {"status": "cadastro_indisponivel"})
+            return
+        if self.current_user() != os.environ.get("IPTU_ADMIN_USER", "iptu"):
+            self.send_json(403, {"status": "conta_administradora_necessaria"})
+            return
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            size = 0
+        if not 0 < size <= SIL_IMPORT_MAX_BYTES:
+            self.send_json(413, {"status": "Selecione um CSV com até 256 MiB."})
+            return
+        if not SIL_IMPORT_SLOT.acquire(blocking=False):
+            self.send_json(409, {"status": "Já há um cadastro em importação."})
+            return
+        try:
+            self.connection.settimeout(40)
+            with tempfile.TemporaryDirectory(dir=batch.ROOT) as directory:
+                source = Path(directory) / "cadastro.csv"
+                with source.open("wb") as stream:
+                    remaining = size
+                    while remaining:
+                        chunk = self.rfile.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            raise ValueError("O envio do CSV ficou incompleto.")
+                        stream.write(chunk)
+                        remaining -= len(chunk)
+                sil.import_properties(source, database)
+            self.send_json(200, {"carga": sil.load_status(database)})
+        except (UnicodeError, csv.Error):
+            self.send_json(400, {"status": "CSV inválido ou codificação não reconhecida."})
+        except ValueError as error:
+            self.send_json(400, {"status": str(error)})
+        except (OSError, sqlite3.Error):
+            self.send_json(503, {"status": "Falha ao receber ou gravar a carga local."})
+        finally:
+            SIL_IMPORT_SLOT.release()
 
     def handle_integration(self):
         """API de integração (somente leitura): aceite, dados do aceite, datas e origem da decisão."""
@@ -833,7 +886,8 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                 report = historico.dashboard(params["lote_id"], max(7, min(90, int(query.get("dias", "14")))))
                 report["minutos_manuais_por_pagina"] = float(os.environ.get("IPTU_MINUTOS_MANUAIS_POR_PAGINA", "1") or 1)
                 report["recalculando"] = dict(batch.SYNC) if batch.SYNC["total"] > 1 else None
-                report["ritmo_processos_hora"] = batch.throughput(params["lote_id"])
+                report.update(batch.reading_rate(params["lote_id"]))
+                report["fila_releitura"] = batch.rule_read_overview(params["lote_id"])
                 self.send_json(200, report)
             elif url.path == "/api/processos/exportar":
                 rows, _, _ = historico.search(**params, limite=100000, completo=True)
@@ -847,6 +901,39 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif url.path in {"/api/processos/pareceres-lote", "/api/processos/pareceres-lote.csv"}:
+                groups, rows = historico.opinion_export(params["lote_id"])
+                if url.path.endswith(".csv"):
+                    output = io.StringIO()
+                    columns = ["processo_sei", "lote_id", "processo_id", "exercicio", "modalidade", "conclusao",
+                               "situacao", "origem", "tipo", "codigo_tipo", "versao", "motivos", "pendencias",
+                               "conferencias_cadastrais"]
+                    writer = csv.DictWriter(output, fieldnames=columns, delimiter=";")
+                    writer.writeheader()
+                    for row in rows:
+                        row = {**row, **{key: " | ".join(row[key]) for key in
+                                         ("motivos", "pendencias", "conferencias_cadastrais")}}
+                        # Impede interpretação de dados oriundos de formulários como fórmulas.
+                        writer.writerow({key: "'" + value if isinstance(value, str)
+                                         and value.lstrip().startswith(("=", "+", "-", "@")) else value
+                                         for key, value in row.items()})
+                    self.send_data(200, "text/csv; charset=utf-8", ("\ufeff" + output.getvalue()).encode(),
+                                   filename="pareceres-por-tipo.csv")
+                else:
+                    self.send_json(200, {"total": len(rows), "tipos": groups})
+            elif url.path == "/api/processos/pendencias.csv":
+                rows, _, _ = historico.search(filtro="revisao_manual", lote_id=params["lote_id"],
+                                              limite=100000, completo=True)
+                output = io.StringIO()
+                writer = csv.writer(output, delimiter=";")
+                writer.writerow(["lote_id", "processo_id", "grupo_id", "grupo"])
+                for row in rows:
+                    if row["resultado"] == "processando":
+                        continue
+                    for group, label in historico.pending_groups(row["parecer"]).items():
+                        writer.writerow([row["lote_id"], row["processo_id"], group, label])
+                self.send_data(200, "text/csv; charset=utf-8", ("\ufeff" + output.getvalue()).encode(),
+                               filename="pendencias-iptu.csv")
             elif url.path == "/api/processos/exportar.csv":
                 rows, _, _ = historico.search(**params, limite=100000)
                 output = io.StringIO()

@@ -140,6 +140,81 @@ class Parecer(unittest.TestCase):
         self.assertEqual(criteria(report)["beneficio"]["status"], "pendente")
         self.assertEqual(report["resultado"], "em_analise")
 
+    def test_recupera_numero_no_extrato_e_deduplica_renda(self):
+        process = base_process()
+        for row in process["paginas"][4:6]:
+            row["obtido"].pop("numero_beneficio")
+            row["texto_pdf"] = (
+                "Nº do benefício: 164.659.838-2" if row["pagina"] == 7 else "NB: 164659838-2"
+            )
+        report = parecer.assess(process, None)
+        self.assertEqual(criteria(report)["beneficio"]["status"], "atendido")
+        self.assertEqual(report["resumo"]["renda_familiar_centavos"], 324200)
+        self.assertEqual(report["resultado"], "enquadra_conferir_cadastro")
+        source = criteria(report)["beneficio"]["evidencias"][1]
+        self.assertEqual(source["pagina"], 7)
+        self.assertEqual(source["valor"]["fonte_numero_beneficio"], "texto_da_pagina")
+
+    def test_numero_no_texto_exige_rotulo_titular_e_leitura_sem_conflito(self):
+        cases = [
+            ("Protocolo: 1646598382", "", "MARIA D ARC SOUZA"),
+            ("NB: 1646598382", "", "JOAO SOUZA"),
+            ("NB: 1646598382", "NB: 1234567890", "MARIA D ARC SOUZA"),
+            ("NB: 16465983820", "", "MARIA D ARC SOUZA"),
+        ]
+        for native, ocr, holder in cases:
+            with self.subTest(native=native, ocr=ocr, holder=holder):
+                process = base_process()
+                del process["paginas"][5]
+                row = process["paginas"][4]
+                row["obtido"].update(numero_beneficio=None, titular_renda=holder)
+                row.update(texto_pdf=native, texto_ocr=ocr)
+                report = parecer.assess(process, None)
+                self.assertEqual(criteria(report)["beneficio"]["status"], "pendente")
+                self.assertEqual(report["resultado"], "em_analise")
+
+    def test_recupera_numero_rotulado_do_conjuge(self):
+        process = change(base_process(), estado_civil="Casado", nome_conjuge="JOAO SOUZA",
+                         primeira_isencao=True, conjuge_beneficio_numero="1234567890")
+        for row in process["paginas"][3:6]:
+            row["obtido"]["renda_bruta_centavos"] = 100000
+        process["paginas"].append(page(15, "beneficio", {
+            "renda_bruta_centavos": 50000, "competencia_renda": "2026-03",
+            "titular_renda": "JOAO SOUZA",
+        }, texto="NB: 1234567890"))
+        report = parecer.assess(process, None)
+        self.assertEqual(criteria(report)["renda"]["status"], "atendido")
+        self.assertEqual(report["resumo"]["renda_familiar_centavos"], 250000)
+        evidence = criteria(report)["renda"]["evidencias"][-1]
+        self.assertEqual(evidence["valor"]["fonte_numero_beneficio"], "texto_da_pagina")
+
+    def test_extratos_com_mesmo_beneficio_e_mes_mas_valores_divergentes(self):
+        process = base_process()
+        process["paginas"][5]["obtido"]["renda_bruta_centavos"] = 330000
+        report = parecer.assess(process, None)
+        rule = criteria(report)["renda"]
+        self.assertEqual(report["resultado"], "em_analise")
+        self.assertEqual(rule["status"], "pendente")
+        self.assertEqual([item["pagina"] for item in rule["componentes_renda"]], [6])
+        self.assertEqual([item["pagina"] for item in rule["comprovantes_divergentes"]], [7, 8])
+
+    def test_nome_identico_nao_supera_cpf_divergente_no_documento(self):
+        process = base_process()
+        process["paginas"][2]["obtido"]["cpf_documento"] = "999.888.777-66"
+        report = parecer.assess(process, None)
+        rule = criteria(report)["identidade"]
+        self.assertEqual((rule["status"], rule["codigo"]), ("pendente", "dados_divergentes"))
+
+    def test_detalha_resposta_faltante_e_leituras_do_requerimento(self):
+        process = change(base_process(), edicula_alugada=None)
+        form = process["requerimentos"][0]
+        form["divergencias"] = ["estado_civil"]
+        form["leitura_detalhada"] = {"respostas": {"estado_civil": "Casado"}}
+        rules = criteria(parecer.assess(process, None))
+        self.assertIn("aluguel", rules["edícula"]["lacunas"])
+        comparison = rules["dupla_leitura"]["evidencias"][0]
+        self.assertEqual((comparison["primeira_leitura"], comparison["segunda_leitura"]), ("Viúvo", "Casado"))
+
     def test_casado_sem_renda_do_conjuge(self):
         process = change(base_process(), estado_civil="Casado", nome_conjuge="JOAO SOUZA",
                          primeira_isencao=False)

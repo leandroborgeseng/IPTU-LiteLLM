@@ -399,23 +399,30 @@ o ZIP novamente.
 
 ### Carga do Cadastro Imobiliário da SIL para busca por CPF
 
-Obtenha da SIL uma exportação com uma linha por vínculo entre CPF e inscrição
-imobiliária. Use CSV UTF-8 com cabeçalhos `cpf` e `inscricao_imobiliaria`,
+No painel, entre com a conta administradora, abra **Cadastro imobiliário da SIL**
+e selecione o CSV original. São aceitos arquivos UTF-8 ou Windows-1252. A
+exportação com `inscrfisico`, `cpfcnpjresponsavel` e `situacaofisico`
+habilita o cruzamento local por inscrição e por CPF. CNPJs e documentos sem CPF
+válido continuam no total da carga imobiliária, sem gerar vínculos pessoais.
+
+A carga detalhada usa o cadastro local no lugar das consultas externas da SIL
+no parecer. Um responsável não localizado no extrato segue para conferência
+cadastral. A base imobiliária não verifica o cadastro mobiliário.
+
+Também é possível importar pelo terminal do serviço do painel. O formato
+simplificado de vínculos exige os cabeçalhos `cpf` e `inscricao_imobiliaria`,
 separados por ponto e vírgula ou vírgula. Preserve os zeros à esquerda.
-Copie a exportação para um caminho privado acessível ao container e execute
-no terminal do serviço do painel:
 
 ```sh
-python app.py importar-imoveis /data/imoveis.csv
+python app.py importar-imoveis /data/resultado.csv
 ```
 
 Acrescente `--completa` somente para uma exportação conferida que abranja todos
-os vínculos aplicáveis. A carga incompleta sinaliza inscrições encontradas
-para revisão. A carga completa pode confirmar a unicidade se a inscrição
-do pedido e os CPFs aplicáveis estiverem identificados. Inscrições adicionais,
-inclusive possíveis unidades anexas, são encaminhadas para conferência.
+os vínculos aplicáveis. A carga incompleta sinaliza inscrições adicionais para
+conferência. A carga completa pode confirmar a unicidade se a inscrição do
+pedido e os CPFs aplicáveis estiverem identificados.
 
-O comando substitui atomicamente a carga anterior em `/data/sil-imoveis.db`
-após validar todo o arquivo. O painel detecta a nova carga e recalcula o
-histórico sem reler os PDFs. A consulta por inscrição e o Cadastro Mobiliário
-continuam usando a API da SIL quando configurada.
+A importação substitui atomicamente a carga anterior em `/data/sil-imoveis.db`
+após validar o CSV. O painel detecta a nova carga e recalcula os pareceres com
+as leituras salvas. Com o formato simplificado, as consultas por inscrição e
+ao cadastro mobiliário continuam usando a API da SIL quando configurada.

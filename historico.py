@@ -39,7 +39,8 @@ _path = None
 
 
 def pending_groups(body):
-    report = (json.loads(body).get("parecer") or {}) if body else {}
+    document = json.loads(body) if isinstance(body, str) else body
+    report = (document or {}).get("parecer") or {}
     support = report.get("possiveis_comprovantes") or {}
     labels = {
         "identidade": "Identidade e composição familiar",
@@ -76,6 +77,74 @@ def pending_groups(body):
             if document in support and not support[document]:
                 groups["documento_" + document] = label
     return groups or {"sem_classificacao": "Pendência sem classificação"}
+
+
+
+OPINION_STATUS = {
+    "enquadra": "Proposta de deferimento",
+    "enquadra_conferir_cadastro": "Proposta de deferimento com conferência cadastral",
+    "nao_enquadra": "Proposta de indeferimento",
+}
+
+
+def opinion_export(lote_id=""):
+    """Agrupa pareceres pela conclusão e pelos critérios que fundamentam a conclusão."""
+    clause, args = _filters(lote_id=lote_id)
+    clause = (clause + " AND " if clause else "WHERE ") + (
+        "decisao IN ('deferido', 'indeferido') AND resultado != 'processando' AND parecer IS NOT NULL"
+    )
+    exported, types = [], {}
+    with closing(connect()) as db:
+        records = db.execute(
+            f"SELECT lote_id, processo_id, sei, versao, parecer FROM processos {clause} "
+            "ORDER BY lote_id, sei, processo_id", args)
+        for record in records:
+            document = json.loads(record["parecer"])
+            report = document.get("parecer") or {}
+            outcome = report.get("resultado")
+            rules = report.get("criterios") or []
+            human = (document.get("conferencia_manual") or {}).get("decisao")
+            if human:
+                decision = human["resultado"]
+                state = "Deferimento registrado" if decision == "deferido" else "Indeferimento registrado"
+                reasons = [human["justificativa"]]
+                basis = [" ".join(human["justificativa"].casefold().split())]
+                origin = "revisao_humana"
+            elif outcome in OPINION_STATUS:
+                decision = "indeferido" if outcome == "nao_enquadra" else "deferido"
+                state = OPINION_STATUS[outcome]
+                origin = "ia"
+                status = "impedimento" if decision == "indeferido" else "cadastral"
+                decisive = [rule for rule in rules if rule["status"] == status]
+                if not decisive and status == "impedimento":
+                    continue
+                reasons = [rule["motivo"] for rule in decisive]
+                basis = sorted({(rule["criterio"], rule.get("codigo") or "") for rule in decisive})
+            else:
+                continue
+            exercise = report.get("exercicio")
+            modality = report.get("modalidade") or ""
+            key = json.dumps([decision, state, exercise, modality, basis], ensure_ascii=False)
+            code = hashlib.sha256(key.encode()).hexdigest()[:16]
+            criteria = sorted({rule[0] for rule in basis}) if not human else ["justificativa_humana"]
+            group = types.setdefault(code, {
+                "codigo_tipo": code, "conclusao": decision, "situacao": state,
+                "exercicio": exercise, "modalidade": modality, "criterios": criteria, "total": 0,
+            })
+            group["total"] += 1
+            exported.append({
+                "codigo_tipo": code, "processo_sei": record["sei"], "lote_id": record["lote_id"],
+                "processo_id": record["processo_id"], "versao": record["versao"], "conclusao": decision,
+                "situacao": state, "exercicio": exercise, "modalidade": modality, "origem": origin,
+                "motivos": reasons, "pendencias": report.get("pendencias") or [],
+                "conferencias_cadastrais": report.get("conferencias_cadastrais") or [],
+            })
+    groups = sorted(types.values(), key=lambda group: (group["situacao"], -group["total"], group["codigo_tipo"]))
+    for index, group in enumerate(groups, 1):
+        group["tipo"] = f"Parecer tipo {index:02d}"
+    for row in exported:
+        row["tipo"] = types[row["codigo_tipo"]]["tipo"]
+    return groups, exported
 
 
 def pending_summary(lote_id=""):

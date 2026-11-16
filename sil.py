@@ -5,6 +5,7 @@ SIL_BASE_URL, SIL_CLIENT_ID, SIL_CLIENT_SECRET e SIL_SCOPE.
 Documentação: https://interface.siltecnologia.com.br/apidocs/franca/
 """
 
+import codecs
 import csv
 import json
 import os
@@ -145,37 +146,77 @@ def normalize_registration(value):
     return re.sub(r"[.\s/-]", "", str(value or ""))
 
 
+def _source_encoding(source):
+    """Detecta as duas codificações usadas nas exportações da SIL."""
+    decoder = codecs.getincrementaldecoder("utf-8-sig")()
+    try:
+        with source.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                decoder.decode(chunk)
+            decoder.decode(b"", final=True)
+        return "utf-8-sig"
+    except UnicodeDecodeError:
+        return "cp1252"
+
+
 def import_properties(source, database, *, complete=False):
     """Substitui a carga somente depois de validar todo o arquivo."""
     database.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=database.parent) as directory:
         staging = Path(directory) / "cadastro.db"
-        with closing(sqlite3.connect(staging)) as db, db, source.open(encoding="utf-8-sig", newline="") as stream:
-            sample = stream.read(4096)
+        with closing(sqlite3.connect(staging)) as db, db, source.open(
+            encoding=_source_encoding(source), newline=""
+        ) as stream:
+            header = stream.readline()
             stream.seek(0)
-            delimiter = ";" if sample and ";" in sample.splitlines()[0] else ","
-            reader = csv.DictReader(stream, delimiter=delimiter)
-            headers = reader.fieldnames or []
-            if not {"cpf", "inscricao_imobiliaria"} <= set(headers) or len(headers) != len(set(headers)):
-                raise ValueError("O CSV deve conter cpf e inscricao_imobiliaria.")
+            reader = csv.DictReader(stream, delimiter=";" if ";" in header else ",")
+            headers = [name.strip().casefold() for name in (reader.fieldnames or [])]
+            reader.fieldnames = headers
+            detailed = {"inscrfisico", "cpfcnpjresponsavel", "situacaofisico"} <= set(headers)
+            simple = {"cpf", "inscricao_imobiliaria"} <= set(headers)
+            if (not (detailed or simple) or len(headers) != len(set(headers))
+                    or ("" in headers and headers[-1] != "")):
+                raise ValueError("Cabeçalhos desconhecidos. Selecione o CSV original da SIL ou o CSV de vínculos.")
             db.execute("CREATE TABLE vinculos (cpf TEXT, inscricao TEXT, PRIMARY KEY(cpf, inscricao)) WITHOUT ROWID")
             db.execute("CREATE TABLE carga (completa INTEGER, carregada_em INTEGER)")
+            if detailed:
+                db.execute("""CREATE TABLE imoveis (
+                    inscricao TEXT PRIMARY KEY, situacao TEXT, logradouro TEXT, endereco TEXT,
+                    ambiguo INTEGER NOT NULL DEFAULT 0
+                ) WITHOUT ROWID""")
+                db.execute("CREATE INDEX vinculos_por_inscricao ON vinculos(inscricao)")
+                db.execute("CREATE TABLE estatisticas_sil (linhas INTEGER, sem_cpf_valido INTEGER)")
+            lines = without_cpf = 0
             for row in reader:
-                cpf = normalize_cpf(row["cpf"])
-                registration = normalize_registration(row["inscricao_imobiliaria"])
-                if None in row or not cpf or not re.fullmatch(r"[0-9]{5,30}", registration):
-                    raise ValueError(f"CPF ou inscrição inválidos na linha {reader.line_num}.")
-                db.execute("INSERT OR IGNORE INTO vinculos VALUES (?, ?)", (cpf, registration))
+                lines += 1
+                cpf = normalize_cpf(row["cpfcnpjresponsavel" if detailed else "cpf"])
+                registration = normalize_registration(row["inscrfisico" if detailed else "inscricao_imobiliaria"])
+                if (None in row or row.get("") not in (None, "") or any(row[key] is None for key in headers)
+                        or not re.fullmatch(r"[0-9]{5,30}", registration) or (not detailed and not cpf)):
+                    raise ValueError(f"CSV inválido na linha {reader.line_num}. Confira a inscrição e as colunas.")
+                if detailed:
+                    db.execute("""INSERT INTO imoveis(inscricao, situacao, logradouro, endereco)
+                        VALUES (?, ?, ?, ?) ON CONFLICT(inscricao) DO UPDATE SET ambiguo = 1
+                        WHERE imoveis.situacao != excluded.situacao OR imoveis.logradouro != excluded.logradouro
+                           OR imoveis.endereco != excluded.endereco""",
+                        (registration, row["situacaofisico"].strip(), (row.get("imovellogradouro") or "").strip(),
+                         (row.get("imovelendereco") or "").strip()))
+                if cpf:
+                    db.execute("INSERT OR IGNORE INTO vinculos VALUES (?, ?)", (cpf, registration))
+                else:
+                    without_cpf += 1
             count = db.execute("SELECT count(*) FROM vinculos").fetchone()[0]
             if not count:
-                raise ValueError("A carga não contém vínculos.")
+                raise ValueError("A carga não contém vínculos com CPF válido.")
+            if detailed:
+                db.execute("INSERT INTO estatisticas_sil VALUES (?, ?)", (lines, without_cpf))
             db.execute("INSERT INTO carga VALUES (?, ?)", (int(complete), int(time.time())))
         staging.chmod(0o600)
         os.replace(staging, database)
     return count
 
 
-def local_properties(database, cpfs):
+def local_properties(database, cpfs, registration=None):
     if not database.is_file():
         return None
     with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as db:
@@ -187,5 +228,34 @@ def local_properties(database, cpfs):
                 results[cpf] = [row[0] for row in db.execute(
                     "SELECT inscricao FROM vinculos WHERE cpf=? ORDER BY inscricao", (cpf,)
                 )]
-    return {"fonte": "carga_local_sil", "cobertura_completa": bool(complete),
-            "carregada_em": timestamp, "por_cpf": results}
+        answer = {"fonte": "carga_local_sil", "cobertura_completa": bool(complete),
+                  "carregada_em": timestamp, "por_cpf": results}
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='imoveis'").fetchone():
+            answer["cadastro_detalhado"] = True
+            key = normalize_registration(registration)
+            if key:
+                row = db.execute("SELECT situacao, logradouro, endereco, ambiguo FROM imoveis WHERE inscricao=?",
+                                 (key,)).fetchone()
+                if row and not row[3]:
+                    answer["imovel"] = {"Situacao": {"Situacao": row[0]},
+                                        "LocalImovel": {"Logradouro": row[1], "Endereco": row[2]},
+                                        "responsaveis": [{"cpfCnpj": item[0]} for item in db.execute(
+                                            "SELECT cpf FROM vinculos WHERE inscricao=? ORDER BY cpf", (key,))],
+                                        "fonte_local": True}
+    return answer
+
+
+def load_status(database):
+    if not database.is_file():
+        return None
+    with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+        complete, timestamp = db.execute("SELECT completa, carregada_em FROM carga").fetchone()
+        detailed = bool(db.execute("SELECT 1 FROM sqlite_master WHERE name='estatisticas_sil'").fetchone())
+        status = {"carregada_em": timestamp, "cobertura_completa": bool(complete),
+                  "vinculos_cpf": db.execute("SELECT count(*) FROM vinculos").fetchone()[0],
+                  "cadastro_detalhado": detailed}
+        if detailed:
+            status["linhas"], status["linhas_sem_cpf_valido"] = db.execute(
+                "SELECT linhas, sem_cpf_valido FROM estatisticas_sil").fetchone()
+            status["inscricoes"] = db.execute("SELECT count(*) FROM imoveis").fetchone()[0]
+    return status

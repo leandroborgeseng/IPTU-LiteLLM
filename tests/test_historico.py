@@ -58,6 +58,35 @@ class Banco(unittest.TestCase):
         self.assertEqual((totals["todos"], totals["aceitos"], totals["nao_aceitos"], totals["revisao_manual"],
                           totals["somente_ia"]), (3, 1, 1, 1, 3))
 
+    def test_pareceres_agrupam_mesmo_criterio_e_separam_conferencia_cadastral(self):
+        def register(key, outcome, criterion=None, reason="", review=None, lot="L"):
+            status = "impedimento" if outcome == "nao_enquadra" else "cadastral"
+            rules = [{"criterio": criterion, "status": status, "motivo": reason}] if criterion else []
+            body = {"parecer": {"resultado": outcome, "criterios": rules,
+                                "exercicio": 2027, "modalidade": "pensao"}, "conferencia_manual": review}
+            overrides = {"decisao": review["decisao"]["resultado"]} if review else {}
+            historico.upsert(lot, key, "lote", key, summary(outcome, **overrides), body, "s", "leitura")
+
+        register("A", "nao_enquadra", "renda", "R$ 5.000,00 acima do teto")
+        register("B", "nao_enquadra", "renda", "R$ 6.000,00 acima do teto", lot="Outro")
+        register("C", "nao_enquadra", "residencia", "Não reside no imóvel")
+        register("D", "enquadra")
+        register("E", "enquadra_conferir_cadastro", "unicidade", "Conferir SIL")
+        register("F", "em_analise")
+        register("G", "em_analise", review={"decisao": {"resultado": "deferido",
+                                                       "justificativa": "Conferência humana individual"}})
+        groups, exported = historico.opinion_export()
+        rows = {row["processo_id"]: row for row in exported}
+        self.assertEqual(len(groups), 5)
+        self.assertEqual(rows["A"]["codigo_tipo"], rows["B"]["codigo_tipo"])
+        self.assertNotEqual(rows["A"]["motivos"], rows["B"]["motivos"])
+        self.assertNotEqual(rows["A"]["codigo_tipo"], rows["C"]["codigo_tipo"])
+        self.assertNotEqual(rows["D"]["codigo_tipo"], rows["E"]["codigo_tipo"])
+        self.assertNotIn("F", rows)
+        self.assertEqual(rows["G"]["situacao"], "Deferimento registrado")
+        _, subset = historico.opinion_export("Outro")
+        self.assertEqual(subset[0]["codigo_tipo"], rows["B"]["codigo_tipo"])
+
     def test_exclusao_registra_auditoria_sem_dados_pessoais(self):
         historico.upsert("L", "P", "lote", "proc", summary("enquadra"), {"cpf": "111"}, "s", "x")
         historico.delete("L", "P", "3516200.410.00000001-2026-01", "iptu")

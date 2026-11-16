@@ -228,6 +228,14 @@ footer.admin button { font-size: .8rem; }
 
 <main>
   <div class="banner" id="recalc" hidden role="status"></div>
+  <section class="card" aria-labelledby="releitura-title">
+    <div class="card-head">
+      <h2 id="releitura-title">Fila de releitura</h2>
+      <span class="muted" id="releitura-worker">Consultando o worker…</span>
+    </div>
+    <p class="small" id="releitura-resumo" role="status"></p>
+    <div class="lots" id="releitura-lotes"></div>
+  </section>
   <!-- Indicadores -->
   <section class="kpis" aria-label="Indicadores">
     <div class="card kpi"><div class="label"><span class="icon i-brand" aria-hidden="true">#</span>Processados</div>
@@ -238,7 +246,7 @@ footer.admin button { font-size: .8rem; }
       <div class="value" id="k-nao">—</div><div class="sub" id="k-nao-sub"></div></div>
     <div class="card kpi"><div class="label"><span class="icon i-warning" aria-hidden="true">!</span>Revisão manual</div>
       <div class="value" id="k-revisao">—</div><div class="sub" id="k-revisao-sub"></div></div>
-    <div class="card kpi"><div class="label"><span class="icon i-brand" aria-hidden="true">⏱</span>Tempo de IA por cidadão</div>
+    <div class="card kpi"><div class="label"><span class="icon i-brand" aria-hidden="true">⏱</span>Tempo efetivo por processo</div>
       <div class="value" id="k-tempo">—</div><div class="sub" id="k-tempo-sub"></div></div>
     <div class="card kpi"><div class="label"><span class="icon i-brand" aria-hidden="true">◆</span>Tokens de IA usados</div>
       <div class="value" id="k-tokens">—</div><div class="sub" id="k-tokens-sub"></div></div>
@@ -255,7 +263,7 @@ footer.admin button { font-size: .8rem; }
         <span><span class="icon" style="background:var(--line-strong)">…</span>Em leitura</span></div>
       <details class="data-table"><summary>Ver os dados</summary><div id="table-volume"></div></details>
     </div>
-    <div class="card"><div class="card-head"><h2>Tempo de IA por cidadão</h2><span class="muted">por envio</span></div>
+    <div class="card"><div class="card-head"><h2>Tempo acumulado de leitura por processo</h2><span class="muted">soma das páginas · por envio</span></div>
       <div class="chart" id="chart-tempo"></div>
       <details class="data-table"><summary>Ver os dados</summary><div id="table-tempo"></div></details>
     </div>
@@ -263,6 +271,19 @@ footer.admin button { font-size: .8rem; }
       <div class="chart" id="chart-tokens"></div>
       <details class="data-table"><summary>Ver os dados</summary><div id="table-tokens"></div></details>
     </div>
+  </section>
+
+  <section class="card" aria-labelledby="sil-cadastro-title">
+    <details id="sil-cadastro">
+      <summary id="sil-cadastro-title">Cadastro imobiliário da SIL</summary>
+      <p id="sil-cadastro-status" class="small muted" role="status"></p>
+      <form id="sil-cadastro-form">
+        <label for="sil-cadastro-arquivo">Exportação da SIL em CSV</label>
+        <input id="sil-cadastro-arquivo" type="file" accept=".csv,text/csv" required>
+        <button type="submit">Importar cadastro</button>
+      </form>
+      <p id="sil-cadastro-mensagem" class="small" role="status"></p>
+    </details>
   </section>
 
   <!-- Envio e lotes -->
@@ -297,9 +318,21 @@ footer.admin button { font-size: .8rem; }
       <div class="exports"><a id="json-all" download="pareceres-iptu.json"><button type="button" tabindex="-1">Exportar JSON</button></a>
         <a id="csv" download="pareceres-iptu.csv"><button type="button" tabindex="-1">Exportar CSV</button></a></div>
     </div>
+    <details id="pareceres-lote">
+      <summary>Pareceres por tipo</summary>
+      <p class="small muted" id="pareceres-lote-status" role="status"></p>
+      <div class="exports">
+        <button id="pareceres-lote-atualizar" type="button">Atualizar grupos</button>
+        <a id="pareceres-lote-csv" href="/api/processos/pareceres-lote.csv" download="pareceres-por-tipo.csv">
+          Exportar processos por tipo (CSV)
+        </a>
+      </div>
+      <ul id="pareceres-lote-grupos"></ul>
+    </details>
     <details id="pendencias">
       <summary>Pedidos por pendência</summary>
       <p id="pendencias-total" role="status"></p>
+      <a id="pendencias-csv" href="/api/processos/pendencias.csv" download="pendencias-iptu.csv">Exportar pedidos por pendência (CSV)</a>
       <div class="chips" id="pendencias-grupos" role="group" aria-label="Filtrar por pendência"></div>
     </details>
     <div class="chips" id="counts" role="group" aria-label="Filtrar pela decisão"></div>
