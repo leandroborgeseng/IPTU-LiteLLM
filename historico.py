@@ -38,9 +38,63 @@ _WRITE = Lock()
 _path = None
 
 
+def pending_groups(body):
+    report = (json.loads(body).get("parecer") or {}) if body else {}
+    support = report.get("possiveis_comprovantes") or {}
+    labels = {
+        "identidade": "Identidade e composição familiar",
+        "beneficio": "Titularidade do benefício",
+        "renda": "Renda familiar",
+        "imovel": "Vínculo com o imóvel e cadastro",
+        "unicidade": "Unicidade do imóvel",
+        "residencia": "Residência no imóvel",
+        "processo_sei": "Número SEI",
+        "exercicio": "Exercício do pedido",
+        "modalidade": "Modalidade do pedido",
+        "edícula": "Edícula e uso do imóvel",
+        "prazo": "Prazo do pedido",
+        "leitura": "Falha de leitura de documento",
+        "mobiliario": "Inscrição mobiliária",
+        "dupla_leitura": "Divergência na leitura",
+        "requerimento": "Requerimento não localizado",
+    }
+    documents = {
+        "identidade": ("identificacao", "Documento de identificação não localizado"),
+        "beneficio": ("beneficio_e_renda", "Comprovante de benefício ou renda não localizado"),
+        "renda": ("beneficio_e_renda", "Comprovante de benefício ou renda não localizado"),
+        "imovel": ("vinculo_com_imovel", "Documento de vínculo com o imóvel não localizado"),
+        "residencia": ("residencia", "Comprovante de residência não localizado"),
+    }
+    groups = {}
+    for rule in report.get("criterios") or []:
+        if rule["status"] != "pendente":
+            continue
+        key = rule["criterio"]
+        groups[key] = labels.get(key, key.replace("_", " ").capitalize())
+        if key in documents:
+            document, label = documents[key]
+            if document in support and not support[document]:
+                groups["documento_" + document] = label
+    return groups or {"sem_classificacao": "Pendência sem classificação"}
+
+
+def pending_summary(lote_id=""):
+    clause, args = _filters(filtro="revisao_manual", lote_id=lote_id)
+    groups = {}
+    total = 0
+    with closing(connect()) as db:
+        for (body,) in db.execute(f"SELECT parecer FROM processos {clause} AND resultado != 'processando'", args):
+            total += 1
+            for key, label in pending_groups(body).items():
+                group = groups.setdefault(key, {"id": key, "rotulo": label, "total": 0})
+                group["total"] += 1
+    return {"total": total, "grupos": sorted(groups.values(), key=lambda item: (-item["total"], item["rotulo"]))}
+
+
 def connect():
     connection = sqlite3.connect(_path, timeout=30)
     connection.row_factory = sqlite3.Row
+    connection.create_function("tem_pendencia", 2, lambda body, key: key in pending_groups(body))
     return connection
 
 
@@ -195,6 +249,9 @@ def _filters(q="", filtro="", lote_id=""):
         column, values = FILTERS[filtro]
         where.append(f"{column} IN ({','.join('?' * len(values))})")
         args += list(values)
+    if filtro.startswith("pendencia:"):
+        where.append("decisao = 'pendente' AND resultado != 'processando' AND tem_pendencia(parecer, ?)")
+        args.append(filtro.removeprefix("pendencia:"))
     if filtro == "duplicados":
         where.append(DUPLICATE_SQL)
     if lote_id:

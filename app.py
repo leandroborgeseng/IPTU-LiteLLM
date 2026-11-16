@@ -802,6 +802,8 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
         try:
             if url.path == "/api/auditoria":
                 self.send_json(200, historico.audit())
+            elif url.path == "/api/processos/pendencias":
+                self.send_json(200, historico.pending_summary(params["lote_id"]))
             elif url.path == "/api/processos":
                 size = max(10, min(500, int(query.get("por_pagina", "50"))))
                 page = max(1, int(query.get("pagina", "1")))

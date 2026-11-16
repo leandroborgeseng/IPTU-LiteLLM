@@ -293,6 +293,11 @@ footer.admin button { font-size: .8rem; }
       <div class="exports"><a id="json-all" download="pareceres-iptu.json"><button type="button" tabindex="-1">Exportar JSON</button></a>
         <a id="csv" download="pareceres-iptu.csv"><button type="button" tabindex="-1">Exportar CSV</button></a></div>
     </div>
+    <details id="pendencias">
+      <summary>Pedidos por pendência</summary>
+      <p id="pendencias-total" role="status"></p>
+      <div class="chips" id="pendencias-grupos" role="group" aria-label="Filtrar por pendência"></div>
+    </details>
     <div class="chips" id="counts" role="group" aria-label="Filtrar pela decisão"></div>
     <div style="overflow-x:auto">
       <table>

@@ -669,9 +669,36 @@ function formatDate(value) {
   return value ? new Date(value * 1000).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}) : '';
 }
 
+async function refreshPendingGroups() {
+  if (!$('pendencias').open) return;
+  const batch = currentBatch;
+  const params = new URLSearchParams({lote: batch});
+  const data = await request('/api/processos/pendencias?' + params);
+  if (currentBatch !== batch || !$('pendencias').open) return;
+  $('pendencias-total').textContent = number(data.total) +
+    ' em revisão manual. Um pedido pode aparecer em mais de um grupo.';
+  $('pendencias-grupos').replaceChildren(...data.grupos.map((group) => {
+    const filter = 'pendencia:' + group.id;
+    const active = view.filtro === filter;
+    return el('button', {type:'button', class:'chip' + (active ? ' on' : ''),
+      'aria-pressed':String(active), onclick: () => {
+        view.filtro = active ? 'revisao_manual' : filter;
+        view.pagina = 1;
+        refreshTable();
+      }}, group.rotulo, el('span', {class:'n'}, number(group.total)));
+  }));
+}
+
+$('pendencias').ontoggle = () => refreshPendingGroups().catch((error) => {
+  $('pendencias-total').textContent = 'Falha ao carregar pendências · ' + error.message;
+});
+
 async function refreshTable() {
   const data = await request('/api/processos?' + query({pagina: view.pagina, por_pagina: view.por_pagina}));
   if (view.pagina > data.paginas) { view.pagina = data.paginas; return refreshTable(); }
+  if ($('pendencias').open) refreshPendingGroups().catch((error) => {
+    $('pendencias-total').textContent = 'Falha ao carregar pendências · ' + error.message;
+  });
   const totals = data.totais || {};
   $('counts').replaceChildren(...FILTROS.map(([key, label, total]) => el('button', {
     type: 'button', class: 'chip' + (view.filtro === key ? ' on' : ''), 'aria-pressed': String(view.filtro === key),
