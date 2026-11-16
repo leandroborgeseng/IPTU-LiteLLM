@@ -108,6 +108,23 @@ class Parecer(unittest.TestCase):
         self.assertNotIn("mobiliario", criteria(report))
         self.assertEqual(report["resultado"], "enquadra_conferir_cadastro")
 
+    def test_divorciada_com_um_beneficio_comprovado_sem_declaracao(self):
+        process = change(base_process(), estado_civil="Divorciada", modalidade_criterio=None,
+                         beneficio_aposentadoria_numero=None, beneficio_aposentadoria_centavos=None,
+                         beneficio_pensao_numero=None, beneficio_pensao_centavos=None)
+        process["paginas"] = [row for row in process["paginas"] if row["pagina"] not in {7, 8, 9}]
+        benefit = next(row for row in process["paginas"] if row["pagina"] == 6)
+        benefit["obtido"]["especie_beneficio"] = "21 - Pensão por morte"
+        report = parecer.assess(process, None)
+        self.assertEqual(report["resultado"], "enquadra_conferir_cadastro", report["pendencias"])
+        self.assertEqual(report["modalidade"], "pensao")
+        self.assertEqual(criteria(report)["modalidade"]["evidencias"][0]["pagina"], 6)
+
+        process["paginas"].append(page(15, "beneficio", {
+            **benefit["obtido"], "numero_beneficio": "1646598382",
+        }))
+        self.assertEqual(criteria(parecer.assess(process, None))["modalidade"]["status"], "pendente")
+
     def test_renda_acima_do_teto_indefere(self):
         process = base_process()
         process["paginas"][3]["obtido"]["renda_bruta_centavos"] = 200000

@@ -204,6 +204,20 @@ def assess(process, review, cadastro=None):
                       if unique(f"beneficio_{kind}_numero") or unique(f"beneficio_{kind}_centavos")}
     marked = set().union(*(modality_parts(item["valor"]) for item in facts.get("modalidade_criterio", [])))
     modalities = declared_kinds | (marked & SOCIAIS) if declared_kinds else marked
+    marital = "_".join(fold(unique("estado_civil")).split())
+    modality_sources = facts.get("modalidade_criterio")
+    if not modalities and marital in {"divorciado", "divorciada"}:
+        personal_benefits = [item for item in income if item["valor"]["tipo"] == "beneficio"
+                             and same_person(item["valor"]["titular_renda"], applicant)]
+        numbers = {digits(item["valor"]["numero_beneficio"]) for item in personal_benefits}
+        single_benefit = len(personal_benefits) == 1 or (len(numbers) == 1 and "" not in numbers)
+        if single_benefit:
+            species = set().union(*(modality_parts(re.sub(
+                r"^\s*\d+\W*", "", item["valor"]["especie_beneficio"] or ""
+            )) for item in personal_benefits))
+            if len(species) == 1 and species <= ELEGIVEIS:
+                modalities = species
+                modality_sources = personal_benefits
     modality = "+".join(sorted(modalities)) or None
     complete = process["status"] == "em_revisao"
     eligible_modality = bool(modalities) and modalities <= ELEGIVEIS
@@ -227,7 +241,7 @@ def assess(process, review, cadastro=None):
             facts.get("modalidade_criterio"))
     else:
         add("modalidade", "atendido", "Modalidade elegível: " + modality_label(modality) + ".",
-            facts.get("modalidade_criterio"))
+            modality_sources)
 
     # Identidade: CPF ou nome do requerimento conferem com documento de identificação.
     if not confirmation("identidade"):
@@ -299,7 +313,6 @@ def assess(process, review, cadastro=None):
 
     # Renda: requerente + cônjuge, competência mais recente, sem duplicar benefícios.
     estimate = income_estimate([item for item in income if owner[id(item)] != "terceiro"])
-    marital = "_".join(fold(unique("estado_civil")).split())
     has_spouse = bool(spouse_key) or marital.startswith(("casad", "uniao", "companheir"))
     no_spouse = not spouse_key and (marital in SEM_CONJUGE or flag("conjuge_informado") is False)
     gaps, extra, extra_sources = [], 0, []
