@@ -23,6 +23,9 @@ REQUERIMENTO = (
     "exercicio (ano no título), nome_requerente (Nome), cpf_requerente (CIN/CPF), "
     "endereco_declarado (Endereço + Nº + Complemento + Bairro), estado_civil (Solteiro, Casado, "
     "União Estável, Divorciado ou Viúvo, conforme marcado), "
+    "primeira_isencao (true se a opção marcada indica primeira isenção, false se indica expressamente "
+    "que não é a primeira isenção ou se Recadastramento for a opção marcada. Campo em branco, "
+    "ilegível ou ambíguo: null. A presença de um rótulo impresso não é uma marcação), "
     "modalidade_criterio (aposentadoria, pensao, bpc, renda_mensal_vitalicia, pcd; várias separadas por vírgula; "
     "SOMENTE pelas perguntas sobre o próprio requerente — É Aposentado?, É Pensionista?, Tipo de Benefício — "
     "marcadas Sim; NUNCA pelas perguntas sobre cônjuge ou dependente, como \"Cônjuge é aposentado/pensionista/BPC\" "
@@ -63,6 +66,7 @@ PROMPTS = {"requerimento": REQUERIMENTO, "beneficio": EXTRATO, "holerite": EXTRA
 # Segunda leitura do requerimento: perguntas literais, respostas como texto marcado.
 QUESTIONS = [
     ("estado_civil", "Estado Civil", "estado"),
+    ("primeira_isencao", "Primeira Isenção / Recadastramento (opção marcada)", "primeira_isencao"),
     ("beneficio_aposentadoria_numero", "É Aposentado? / Aposentadoria — Nº Benefício", "digitos"),
     ("beneficio_aposentadoria_centavos", "É Aposentado? / Aposentadoria — Valor", "dinheiro"),
     ("beneficio_pensao_numero", "É Pensionista? — Nº Benefício", "digitos"),
@@ -146,6 +150,12 @@ def to_value(kind, answer):
     if answer is None or str(answer).strip() == "":
         return None
     text = _fold(answer)
+    if kind == "primeira_isencao":
+        if text in {"recadastramento", "renovacao", "nao", "nao e a primeira isencao"}:
+            return False
+        if text in {"primeira isencao", "sim"}:
+            return True
+        return None
     if kind == "simnao":
         if text.startswith("nao se aplica") or text in {"n/a", "na"}:
             return None

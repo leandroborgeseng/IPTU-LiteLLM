@@ -318,6 +318,7 @@ def assess(process, review, cadastro=None):
     gaps, extra, extra_sources = [], 0, []
     if not (has_spouse or no_spouse):
         gaps.append("estado civil ou cônjuge não identificado no requerimento")
+    renewal_without_spouse_income = False
     if has_spouse:
         spouse_income = [item for item in (estimate or {}).get("comprovantes", [])
                          if owner[id(item)] == "conjuge"]
@@ -327,6 +328,12 @@ def assess(process, review, cadastro=None):
             extra_sources += facts.get("conjuge_renda_centavos", [])
         elif not spouse_income and facts.get("conjuge_renda_centavos"):
             gaps.append("valores declarados de renda do cônjuge divergentes")
+        elif not spouse_income:
+            if flag("primeira_isencao") is False:
+                renewal_without_spouse_income = True
+                extra_sources += facts["primeira_isencao"]
+            else:
+                gaps.append("renda do cônjuge ausente sem indicação expressa de que não é a primeira isenção")
     for field, value_field, label in (
         ("outras_rendas", "outras_rendas_centavos", "outras rendas"),
         ("atividade_economica_declarada", "renda_atividade_centavos", "renda de sócio/autônomo"),
@@ -374,7 +381,9 @@ def assess(process, review, cadastro=None):
             total = None
         else:
             add("renda", "atendido", f"Renda bruta familiar de {money(total)} ({parts}) dentro do teto "
-                f"de {money(TETO_CENTAVOS)} (até 2 salários mínimos).", sources)
+                f"de {money(TETO_CENTAVOS)} (até 2 salários mínimos)."
+                + (" Renda do cônjuge não apresentada em pedido de renovação."
+                   if renewal_without_spouse_income else ""), sources)
     else:
         add("renda", "pendente", "Nenhum comprovante de renda legível. Confira a renda familiar e "
             "registre o total bruto mensal com a fonte.")
@@ -659,7 +668,7 @@ def income_estimate(income):
 
 
 CAMPOS = {
-    "estado_civil": "estado civil", "beneficio_aposentadoria_numero": "nº do benefício de aposentadoria",
+    "primeira_isencao": "primeira isenção", "estado_civil": "estado civil", "beneficio_aposentadoria_numero": "nº do benefício de aposentadoria",
     "beneficio_aposentadoria_centavos": "valor da aposentadoria", "beneficio_pensao_numero": "nº da pensão",
     "beneficio_pensao_centavos": "valor da pensão", "outras_rendas": "outras fontes de renda",
     "reside_no_imovel": "reside no imóvel", "imovel_ponto_comercial": "ponto comercial",

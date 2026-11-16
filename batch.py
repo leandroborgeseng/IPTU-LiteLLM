@@ -108,7 +108,7 @@ ASSESSMENT_FIELDS = {
     "numero_beneficio": str, "especie_beneficio": str, "usufrutuario": bool,
     "imovel_ponto_comercial": bool, "edicula_habitada": bool,
     "edicula_ocupante_familiar": bool, "possui_outro_imovel": bool,
-    "estado_civil": str, "nome_conjuge": str, "conjuge_informado": bool,
+    "primeira_isencao": bool, "estado_civil": str, "nome_conjuge": str, "conjuge_informado": bool,
     "conjuge_renda_centavos": int, "outras_rendas": bool, "outras_rendas_centavos": int,
     "renda_atividade_centavos": int, "trabalha_registrado": bool, "data_requerimento": str,
     "beneficio_aposentadoria_numero": str, "beneficio_aposentadoria_centavos": int,
@@ -122,7 +122,7 @@ DEED_FIELDS = {"nomes_citados", "usufruto_citado"}
 INCOME_FIELDS = {"renda_bruta_centavos", "competencia_renda", "titular_renda",
                  "numero_beneficio", "especie_beneficio"}
 ID_FIELDS = {"nome_documento", "cpf_documento", "filiacao_documento"}
-PAGE_SCHEMA = 10
+PAGE_SCHEMA = 11
 
 
 class ResetRequested(Exception):
