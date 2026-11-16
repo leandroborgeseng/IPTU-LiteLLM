@@ -29,6 +29,7 @@ CONFIRMACOES = {
     "residencia": "Residência no imóvel confirmada",
     "edícula": "Edícula ausente ou com uso enquadrado",
 }
+PENDENCIA_RENOVACAO = "renda do cônjuge ausente sem indicação expressa de que não é a primeira isenção"
 ELEGIVEIS = {"aposentadoria", "pensao", "bpc", "renda_mensal_vitalicia"}
 SOCIAIS = {"pcd", "doenca_grave", "neoplasia"}
 SEM_CONJUGE = {"solteiro", "solteira", "viuvo", "viuva", "divorciado", "divorciada",
@@ -333,7 +334,7 @@ def assess(process, review, cadastro=None):
                 renewal_without_spouse_income = True
                 extra_sources += facts["primeira_isencao"]
             else:
-                gaps.append("renda do cônjuge ausente sem indicação expressa de que não é a primeira isenção")
+                gaps.append(PENDENCIA_RENOVACAO)
     for field, value_field, label in (
         ("outras_rendas", "outras_rendas_centavos", "outras rendas"),
         ("atividade_economica_declarada", "renda_atividade_centavos", "renda de sócio/autônomo"),

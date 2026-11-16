@@ -792,6 +792,89 @@ def run_importer():
         time.sleep(2)
 
 
+AUTO_QUEUE = ".releitura-regras"
+AUTO_DONE = ".releitura-regras-v11.json"
+
+
+def schedule_rule_reads(path, detail):
+    report = detail["parecer"]
+    if detail["status"] != "em_revisao" or final_decision(detail)["decisao"] != "pendente":
+        return
+    folder = path / detail["id"]
+    queued = path / AUTO_QUEUE / (detail["id"] + ".json")
+    if queued.exists() or (folder / AUTO_DONE).exists():
+        return
+    pages = []
+    facts = report["fatos_do_requerimento"]
+    if not facts.get("primeira_isencao") and any(
+        rule["criterio"] == "renda" and rule["status"] == "pendente"
+        and parecer.PENDENCIA_RENOVACAO in rule["motivo"] for rule in report["criterios"]
+    ):
+        pages.extend(detail["requerimentos"])
+    marital = {parecer.fold(item["valor"]).strip() for item in facts.get("estado_civil", [])}
+    applicant = report["resumo"]["requerente"]
+    if not report["modalidade"] and marital in ({"divorciada"}, {"divorciado"}):
+        pages.extend(row for row in detail["paginas"]
+                     if row.get("tipo") == "beneficio"
+                     and parecer.same_person((row.get("obtido") or {}).get("titular_renda"), applicant)
+                     and not (row.get("obtido") or {}).get("especie_beneficio"))
+    targets = []
+    for row in pages:
+        if row.get("versao_extracao", 0) < PAGE_SCHEMA:
+            targets.append({"arquivo": row["arquivo"], "pagina": row["pagina"],
+                            "origem": row["origem"], "tipo": row["tipo"]})
+    if targets:
+        queued.parent.mkdir(exist_ok=True)
+        save(queued, targets)
+        WAKE.set()
+
+
+def run_rule_reads(meta, analyze):
+    path = meta.parent
+    queue = path / AUTO_QUEUE
+    for task in sorted(queue.glob("*.json")):
+        check_reset()
+        if load(meta)["status"] != "concluido":
+            return  # dá prioridade a uma reanálise solicitada pelo operador
+        folder = path / task.stem
+        complete = folder / "complete.json"
+        if not complete.is_file():
+            task.unlink(missing_ok=True)
+            continue
+        errors = 0
+        updated = 0
+        for target in load(task):
+            check_reset()
+            key, number = target["arquivo"], target["pagina"]
+            evidence = folder / f"{key}-{number}.json"
+            if not evidence.is_file() or load(evidence).get("versao_extracao", 0) >= PAGE_SCHEMA:
+                continue
+            # Mantém a leitura anterior disponível até a nova leitura passar na validação.
+            staging = queue / f"{key}-{number}.staged"
+            extension = PurePosixPath(target["origem"]).suffix.lower()
+            try:
+                with PAGE_SLOTS:
+                    _, _, failed = process_page(path / "files" / key, number, staging, analyze, extension, slow=True)
+                result = load(staging)
+                accepted = (result.get("tipo") == target["tipo"] or
+                            (target["tipo"] == "requerimento" and result.get("tipo_sugerido") == "requerimento"))
+                if failed or not accepted:
+                    errors += 1
+                    continue
+                with LOCK:
+                    check_reset()
+                    if load(meta)["status"] != "concluido" or not complete.is_file():
+                        return
+                    os.replace(staging, evidence)
+                    complete.touch()
+                    updated += 1
+            finally:
+                staging.unlink(missing_ok=True)
+        save(folder / AUTO_DONE, {"paginas_atualizadas": updated, "falhas": errors})
+        task.unlink(missing_ok=True)
+        print(f"Releitura de regras {path.name[:8]}/{folder.name[:8]}: {updated} atualizadas, {errors} falhas.", flush=True)
+
+
 def run_worker(analyze):
     global PAGE_SLOTS
     PAGE_SLOTS = BoundedSemaphore(page_workers())
@@ -802,12 +885,20 @@ def run_worker(analyze):
     active = {}
 
     def run_lot(meta):
+        targeted = False
         try:
-            process_batch(meta.parent, analyze)
+            targeted = load(meta)["status"] == "concluido"
+            if targeted:
+                run_rule_reads(meta, analyze)
+            else:
+                process_batch(meta.parent, analyze)
         except ResetRequested:
             pass
         except Exception as exc:
-            mark_failed(meta, exc)
+            if targeted:
+                print(f"Falha na releitura automática {meta.parent.name[:8]}: {type(exc).__name__}", flush=True)
+            else:
+                mark_failed(meta, exc)
 
     while True:
         WAKE.clear()
@@ -820,7 +911,10 @@ def run_worker(analyze):
                     print(f"Falha ao limpar lotes: {type(error).__name__}", flush=True)
             WAKE.wait(3)
             continue
-        for meta in queued_lots({"na_fila", "processando"}):
+        normal = queued_lots({"na_fila", "processando"})
+        targeted = [queue.parent / "batch.json" for queue in ROOT.glob(f"*/{AUTO_QUEUE}")
+                    if next(queue.glob("*.json"), None) is not None]
+        for meta in dict.fromkeys(normal + targeted):
             if len(active) >= max_parallel_lots():
                 break
             if meta.parent.name not in active:
@@ -1032,7 +1126,7 @@ def process_signature(path, process_id):
     folder = path / process_id
     stamps = [(folder / name).stat().st_mtime_ns if (folder / name).exists() else None
               for name in ("complete.json", "review.json", "sil.json")]
-    return historico.signature(stamps, RULES_VERSION, property_load_stamp())
+    return historico.signature(stamps, RULES_VERSION, property_load_stamp(), AUTO_DONE)
 
 
 def export_document(path, detail):
@@ -1103,6 +1197,7 @@ def sync_process(path, process_id, motivo="atualizacao"):
     detail = process_detail(path, process_id)
     summary = summary_of(detail)
     complete = detail["status"] == "em_revisao"
+    schedule_rule_reads(path, detail)
     historico.upsert(path.name, process_id, load(path / "batch.json").get("nome"), item["processo"], summary,
                      export_document(path, detail) if complete else None,
                      process_signature(path, process_id), motivo)
