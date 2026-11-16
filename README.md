@@ -126,8 +126,7 @@ logotipo oficial, coloque `logo.svg` (ou `.png`, `.jpg`, `.webp`) em `/data/marc
 
 ### Parâmetros do exercício
 
-`IPTU_EXERCICIO` (2027), `IPTU_SALARIO_MINIMO_CENTAVOS` (162100; o teto é o dobro) e, opcionalmente,
-`IPTU_PRAZO_INICIO`/`IPTU_PRAZO_FIM` (AAAA-MM-DD) para comparar com a data de assinatura do requerimento.
+`IPTU_EXERCICIO` (2027), `IPTU_SALARIO_MINIMO_CENTAVOS` (162100; o teto é o dobro).
 Atualize-os a cada exercício; a mudança gera nova versão dos pareceres afetados.
 
 ### Desempenho: como o tempo é gasto e como reduzir

@@ -90,8 +90,7 @@ class Parecer(unittest.TestCase):
         report = parecer.assess(base_process(), None, sil_property())
         c = criteria(report)
         self.assertEqual(c["imovel"]["status"], "atendido", c["imovel"]["motivo"])
-        self.assertEqual(c["mobiliario"]["status"], "atendido")
-        self.assertEqual(report["conferencias_cadastrais"], [c["unicidade"]["motivo"], c["prazo"]["motivo"]])
+        self.assertEqual(report["conferencias_cadastrais"], [c["unicidade"]["motivo"]])
 
     def test_sil_endereco_divergente_fica_em_analise(self):
         report = parecer.assess(base_process(), None, sil_property(address="RUA DAS FLORES, 99"))
@@ -102,11 +101,12 @@ class Parecer(unittest.TestCase):
         report = parecer.assess(base_process(), None, sil_property(cpf="999.999.999-99"))
         self.assertEqual(criteria(report)["imovel"]["status"], "pendente")
 
-    def test_sil_mobiliario_ativo_sem_renda(self):
+    def test_inscricao_mobiliaria_nao_gera_pendencia(self):
         cadastro = sil_property()
         cadastro["mobiliario"] = {CPF: {"Nome": "MARIA"}}
         report = parecer.assess(base_process(), None, cadastro)
-        self.assertEqual(criteria(report)["mobiliario"]["status"], "pendente")
+        self.assertNotIn("mobiliario", criteria(report))
+        self.assertEqual(report["resultado"], "enquadra_conferir_cadastro")
 
     def test_renda_acima_do_teto_indefere(self):
         process = base_process()
@@ -242,22 +242,10 @@ class PadroesDosProcessosReais(unittest.TestCase):
 
 
 class Prazo(unittest.TestCase):
-    def setUp(self):
-        self.saved = (parecer.PRAZO_INICIO, parecer.PRAZO_FIM)
-        parecer.PRAZO_INICIO, parecer.PRAZO_FIM = "2026-03-01", "2026-04-30"
-
-    def tearDown(self):
-        parecer.PRAZO_INICIO, parecer.PRAZO_FIM = self.saved
-
-    def test_assinado_dentro_do_prazo(self):
-        c = criteria(parecer.assess(change(base_process(), data_requerimento="2026-04-01"), None))
-        self.assertEqual(c["prazo"]["status"], "cadastral")
-        self.assertIn("dentro do prazo", c["prazo"]["motivo"])
-
-    def test_assinado_fora_do_prazo(self):
+    def test_data_da_assinatura_nao_gera_pendencia(self):
         report = parecer.assess(change(base_process(), data_requerimento="2026-06-15"), None)
-        self.assertEqual(criteria(report)["prazo"]["status"], "pendente")
-        self.assertEqual(report["resultado"], "em_analise")
+        self.assertNotIn("prazo", criteria(report))
+        self.assertEqual(report["resultado"], "enquadra_conferir_cadastro")
 
 
 class ExercicioNaoBloqueia(unittest.TestCase):

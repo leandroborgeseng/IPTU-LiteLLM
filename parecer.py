@@ -20,8 +20,6 @@ from sil import normalize_cpf, normalize_registration
 EXERCICIO = int(os.environ.get("IPTU_EXERCICIO", "2027"))
 SALARIO_MINIMO_CENTAVOS = int(os.environ.get("IPTU_SALARIO_MINIMO_CENTAVOS", "162100"))
 TETO_CENTAVOS = 2 * SALARIO_MINIMO_CENTAVOS  # LC 456/2025: até 2 salários mínimos
-PRAZO_INICIO = os.environ.get("IPTU_PRAZO_INICIO", "")  # AAAA-MM-DD (opcional)
-PRAZO_FIM = os.environ.get("IPTU_PRAZO_FIM", "")
 FONTE_TETO = "https://www3.franca.sp.gov.br/noticia/39898/prazo-para-solicitar-reduo-de-10-no-iptu-termina-nesta-quarta-feira.html"
 FONTE_CRITERIOS = "https://www3.franca.sp.gov.br/cartadeservicos/servicos/iseno-de-iptu-para-aposentados-pensionistas-e-beneficirios-do-bpcloas"
 CONFIRMACOES = {
@@ -30,8 +28,6 @@ CONFIRMACOES = {
     "imovel": "Vínculo com o imóvel e unicidade conferidos no cadastro",
     "residencia": "Residência no imóvel confirmada",
     "edícula": "Edícula ausente ou com uso enquadrado",
-    "prazo": "Data oficial do protocolo e prazo conferidos",
-    "mobiliario": "Cadastro Mobiliário conferido",
 }
 ELEGIVEIS = {"aposentadoria", "pensao", "bpc", "renda_mensal_vitalicia"}
 SOCIAIS = {"pcd", "doenca_grave", "neoplasia"}
@@ -508,34 +504,6 @@ def assess(process, review, cadastro=None):
         else:
             add("unicidade", "cadastral", "Conferir os imóveis por CPF na SIL. A carga local ou os dados identificados não confirmam a unicidade.",
                 source if property_lookup else None)
-
-    activity = cadastro.get("mobiliario")
-    if confirmation("mobiliario"):
-        pass
-    elif activity is not None and not cadastro.get("erro_mobiliario"):
-        found = {cpf: data for cpf, data in activity.items() if data}
-        if not found:
-            add("mobiliario", "atendido", "SIL: nenhuma inscrição mobiliária para o CPF do requerente"
-                + (" ou do cônjuge." if len(activity) > 1 else "."))
-        elif flag("atividade_economica_declarada") is True and type(unique("renda_atividade_centavos")) is int:
-            add("mobiliario", "atendido", "Inscrição mobiliária na SIL com renda da atividade declarada e "
-                "somada à renda familiar.")
-        else:
-            add("mobiliario", "pendente", "SIL indica inscrição mobiliária ativa sem renda da atividade "
-                "declarada. Verificar pró-labore ou faturamento.")
-    else:
-        add("mobiliario", "cadastral", "Conferir no Cadastro Mobiliário (SIL) se o requerente ou o cônjuge "
-            "tem inscrição municipal ativa (sócio ou autônomo).")
-    if not confirmation("prazo"):
-        signed = unique("data_requerimento")
-        signed = signed if isinstance(signed, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", signed) else None
-        if signed and PRAZO_INICIO and PRAZO_FIM and not PRAZO_INICIO <= signed <= PRAZO_FIM:
-            add("prazo", "pendente", f"Requerimento assinado em {signed}, fora do prazo de {PRAZO_INICIO} a "
-                f"{PRAZO_FIM}. Confira a data oficial do protocolo no SEI/F4.", facts.get("data_requerimento"))
-        else:
-            add("prazo", "cadastral", "Conferir no SEI/F4 a data oficial do protocolo e o prazo"
-                + (f" (requerimento assinado em {signed}" + (", dentro do prazo" if PRAZO_INICIO and PRAZO_FIM else "")
-                   + ")" if signed else "") + ".", facts.get("data_requerimento"))
 
     if any(row["status"] != "extraido" or row.get("status_ocr") == "falha_ocr" for row in pages) or any(
         doc["erro"] and doc["erro"] != "formato_nao_processado" for doc in process["arquivos"]
