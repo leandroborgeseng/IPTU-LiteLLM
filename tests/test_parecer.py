@@ -142,7 +142,12 @@ class Parecer(unittest.TestCase):
 
     def test_casado_sem_renda_do_conjuge(self):
         process = change(base_process(), estado_civil="Casado", nome_conjuge="JOAO SOUZA")
-        self.assertEqual(criteria(parecer.assess(process, None))["renda"]["status"], "pendente")
+        report = parecer.assess(process, {"confirmacoes": {"imovel": "Cadastro conferido"}})
+        self.assertEqual(criteria(report)["renda"]["status"], "atendido")
+        self.assertEqual(report["resultado"], "enquadra", report["pendencias"])
+
+        process = change(process, possui_edicula=None)
+        self.assertEqual(parecer.assess(process, None)["resultado"], "em_analise")
 
     def test_casado_com_renda_do_conjuge_declarada(self):
         process = change(base_process(), estado_civil="Casado", nome_conjuge="JOAO SOUZA",

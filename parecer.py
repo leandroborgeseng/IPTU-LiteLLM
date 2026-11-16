@@ -325,8 +325,8 @@ def assess(process, review, cadastro=None):
         if not spouse_income and type(declared_spouse) is int:
             extra += declared_spouse
             extra_sources += facts.get("conjuge_renda_centavos", [])
-        elif not spouse_income:
-            gaps.append("renda do cônjuge sem comprovante ou valor declarado")
+        elif not spouse_income and facts.get("conjuge_renda_centavos"):
+            gaps.append("valores declarados de renda do cônjuge divergentes")
     for field, value_field, label in (
         ("outras_rendas", "outras_rendas_centavos", "outras rendas"),
         ("atividade_economica_declarada", "renda_atividade_centavos", "renda de sócio/autônomo"),
