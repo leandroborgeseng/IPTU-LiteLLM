@@ -3,9 +3,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl poppler-utils \
     && rm -rf /var/lib/apt/lists/*
-RUN python -m pip install --no-cache-dir Pillow==13.0.0
+RUN python -m pip install --no-cache-dir Pillow==13.0.0 openpyxl==3.1.5
 WORKDIR /app
-COPY app.py avaliacao.py batch.py historico.py leitura.py parecer.py sil.py lotes.html lotes.js ./
+COPY relatorio.py app.py avaliacao.py batch.py historico.py leitura.py parecer.py sil.py lotes.html lotes.js ./
 RUN install -d -m 0700 -o 10001 -g 10001 /data
 COPY fixtures/ ./fixtures/
 USER 10001:10001

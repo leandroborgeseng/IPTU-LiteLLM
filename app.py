@@ -901,6 +901,11 @@ pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #eef3f8; padd
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif url.path == "/api/processos/conferencia.xlsx":
+                import relatorio
+                self.send_data(200, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               relatorio.spreadsheet(params["lote_id"], params["q"]),
+                               filename="conferencia-iptu.xlsx")
             elif url.path in {"/api/processos/pareceres-lote", "/api/processos/pareceres-lote.csv"}:
                 groups, rows = historico.opinion_export(params["lote_id"])
                 if url.path.endswith(".csv"):

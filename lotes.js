@@ -819,6 +819,7 @@ async function refreshTable() {
     type: 'button', class: 'chip' + (view.filtro === key ? ' on' : ''), 'aria-pressed': String(view.filtro === key),
     onclick: () => { view.filtro = key; view.pagina = 1; refreshTable(); }},
     label, el('span', {class: 'n'}, number(totals[total || key] || 0)))));
+  $('conferencia-excel').href = '/api/processos/conferencia.xlsx?' + new URLSearchParams({lote: currentBatch, q: view.q || ''});
   $('csv').href = '/api/processos/exportar.csv?' + query();
   $('json-all').href = '/api/processos/exportar?' + query();
   for (const th of document.querySelectorAll('th[data-sort]')) th.dataset.dir = th.dataset.sort === view.ordem ? view.direcao : '';
