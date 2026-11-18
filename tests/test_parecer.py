@@ -427,7 +427,21 @@ class BeneficioDoCasal(unittest.TestCase):
             process["paginas"][-1]["obtido"][field] = value
             self.assertEqual(criteria(parecer.assess(process, None))["beneficio"]["status"], "pendente")
 
-    def test_beneficio_declarado_do_requerente_continua_exigindo_extrato(self):
+    def test_numero_declarado_nao_bloqueia_beneficio_comprovado_do_conjuge(self):
         process = self.process()
         process["requerimentos"][0]["obtido"]["beneficio_pensao_numero"] = "9999999999"
-        self.assertEqual(criteria(parecer.assess(process, None))["beneficio"]["status"], "pendente")
+        self.assertEqual(criteria(parecer.assess(process, None))["beneficio"]["status"], "atendido")
+
+
+class BeneficioPeloNome(unittest.TestCase):
+    def test_numero_ilegivel_ou_divergente_com_nome_confere(self):
+        for number in (None, "1510750298"):
+            with self.subTest(number=number):
+                process = change(base_process(), beneficio_pensao_numero=None,
+                                 beneficio_pensao_centavos=None, modalidade_criterio="aposentadoria")
+                process["paginas"] = [row for row in process["paginas"]
+                                      if row["tipo"] != "beneficio" or row["pagina"] == 7]
+                process["paginas"][3]["obtido"]["numero_beneficio"] = number
+                report = parecer.assess(process, None)
+                self.assertEqual(criteria(report)["beneficio"]["codigo"], "titular_conferido_por_nome")
+                self.assertEqual(criteria(report)["renda"]["status"], "atendido")

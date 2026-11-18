@@ -341,7 +341,9 @@ def assess(process, review, cadastro=None):
     for item in income:
         number = digits(item["valor"].get("numero_beneficio"))
         holder = item["valor"].get("titular_renda")
-        if number and number in declared.values():
+        if holder and not (same_person(holder, applicant) or same_person(holder, spouse)):
+            owner[id(item)] = "terceiro"
+        elif number and number in declared.values():
             owner[id(item)] = "requerente"
         elif number and number == spouse_number:
             owner[id(item)] = "conjuge"
@@ -361,13 +363,16 @@ def assess(process, review, cadastro=None):
                             if (item["valor"].get("competencia_renda") or "") == latest]
     found_numbers = {digits(item["valor"].get("numero_beneficio")) for item in applicant_income}
     missing = {kind: number for kind, number in declared.items() if number not in found_numbers}
+    named_benefits = [item for item in income if item["valor"]["tipo"] == "beneficio"
+                      and same_person(item["valor"].get("titular_renda"), applicant)]
+    name_fallback = bool(missing and len(declared) == 1 and named_benefits)
     benefit_ok = False
     if not confirmation("beneficio"):
         benefit_pages = [row for row in readable if row.get("tipo") == "beneficio"]
         if not benefit_pages:
             add("beneficio", "pendente", "Nenhum extrato de benefício foi localizado.",
                 codigo="extrato_nao_localizado")
-        elif not applicant_income and spouse_benefits and not declared:
+        elif not applicant_income and spouse_benefits and len(declared) <= 1:
             benefit_ok = True
             add("beneficio", "atendido",
                 f"Benefício elegível comprovado em nome do cônjuge {spouse} ({where(spouse_benefits)}).",
@@ -375,6 +380,12 @@ def assess(process, review, cadastro=None):
         elif not applicant_income:
             add("beneficio", "pendente", "Extrato(s) localizado(s) sem renda bruta legível ou vínculo com o requerente.",
                 [evidence(row, row.get("tipo")) for row in benefit_pages], codigo="extrato_sem_vinculo_ou_valor")
+        elif name_fallback:
+            benefit_ok = True
+            add("beneficio", "atendido",
+                f"Benefício conferido pelo nome do requerente {applicant} ({where(named_benefits)}). "
+                "O número lido no extrato não confirmou o número declarado.",
+                named_benefits, beneficiario="requerente", codigo="titular_conferido_por_nome")
         elif missing:
             older_numbers = {digits(item["valor"].get("numero_beneficio")) for item in income
                              if owner[id(item)] == "requerente" and item["valor"]["tipo"] == "beneficio"}
