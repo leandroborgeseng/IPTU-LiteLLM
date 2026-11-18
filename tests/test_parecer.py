@@ -393,3 +393,41 @@ class CruzamentoLocalVisivel(unittest.TestCase):
     def test_informa_carga_ausente(self):
         rule = criteria(parecer.assess(base_process(), None))["unicidade"]
         self.assertEqual(rule["codigo"], "carga_nao_disponivel")
+
+
+class BeneficioDoCasal(unittest.TestCase):
+    def process(self, renda=0):
+        process = change(base_process(), estado_civil="Casado", nome_conjuge="JOAO SOUZA",
+                         modalidade_criterio=None, beneficio_aposentadoria_numero=None,
+                         beneficio_aposentadoria_centavos=None, beneficio_pensao_numero=None,
+                         beneficio_pensao_centavos=None, conjuge_beneficio_numero="1234567890",
+                         requerente_renda_centavos=renda, primeira_isencao=True)
+        process["paginas"] = [row for row in process["paginas"] if row["tipo"] not in {"beneficio", "holerite"}]
+        process["paginas"].append(page(20, "beneficio", {
+            "renda_bruta_centavos": 162100, "competencia_renda": "2026-07",
+            "titular_renda": "JOAO SOUZA", "numero_beneficio": "1234567890",
+            "especie_beneficio": "41 aposentadoria por idade"}))
+        return process
+
+    def test_beneficio_so_do_conjuge_e_renda_do_requerente(self):
+        for amount, expected in [(0, "atendido"), (100000, "atendido"),
+                                 (162100, "atendido"), (162101, "impedimento"), (None, "pendente")]:
+            with self.subTest(amount=amount):
+                report = parecer.assess(self.process(amount), None)
+                self.assertEqual(criteria(report)["beneficio"]["beneficiario"], "conjuge")
+                self.assertEqual(criteria(report)["renda"]["status"], expected)
+                self.assertEqual(report["modalidade"], "aposentadoria")
+                if expected == "atendido":
+                    self.assertEqual(report["resumo"]["renda_familiar_centavos"], 162100 + amount)
+
+    def test_terceiro_ou_especie_nao_identificada_nao_comprovam(self):
+        for field, value in [("titular_renda", "PEDRO SILVA"), ("especie_beneficio", None),
+                             ("especie_beneficio", "auxilio temporario")]:
+            process = self.process()
+            process["paginas"][-1]["obtido"][field] = value
+            self.assertEqual(criteria(parecer.assess(process, None))["beneficio"]["status"], "pendente")
+
+    def test_beneficio_declarado_do_requerente_continua_exigindo_extrato(self):
+        process = self.process()
+        process["requerimentos"][0]["obtido"]["beneficio_pensao_numero"] = "9999999999"
+        self.assertEqual(criteria(parecer.assess(process, None))["beneficio"]["status"], "pendente")

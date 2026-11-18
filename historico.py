@@ -124,7 +124,9 @@ def opinion_export(lote_id=""):
                 continue
             exercise = report.get("exercicio")
             modality = report.get("modalidade") or ""
-            key = json.dumps([decision, state, exercise, modality, basis], ensure_ascii=False)
+            beneficiary = next((rule.get("beneficiario") for rule in rules
+                                if rule["criterio"] == "beneficio"), None)
+            key = json.dumps([decision, state, exercise, modality, basis, beneficiary], ensure_ascii=False)
             code = hashlib.sha256(key.encode()).hexdigest()[:16]
             criteria = sorted({rule[0] for rule in basis}) if not human else ["justificativa_humana"]
             group = types.setdefault(code, {

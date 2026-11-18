@@ -109,7 +109,7 @@ ASSESSMENT_FIELDS = {
     "imovel_ponto_comercial": bool, "edicula_habitada": bool,
     "edicula_ocupante_familiar": bool, "possui_outro_imovel": bool,
     "primeira_isencao": bool, "estado_civil": str, "nome_conjuge": str, "conjuge_informado": bool,
-    "conjuge_renda_centavos": int, "outras_rendas": bool, "outras_rendas_centavos": int,
+    "conjuge_renda_centavos": int, "requerente_renda_centavos": int, "outras_rendas": bool, "outras_rendas_centavos": int,
     "renda_atividade_centavos": int, "trabalha_registrado": bool, "data_requerimento": str,
     "beneficio_aposentadoria_numero": str, "beneficio_aposentadoria_centavos": int,
     "beneficio_pensao_numero": str, "beneficio_pensao_centavos": int,
@@ -122,7 +122,7 @@ DEED_FIELDS = {"nomes_citados", "usufruto_citado"}
 INCOME_FIELDS = {"renda_bruta_centavos", "competencia_renda", "titular_renda",
                  "numero_beneficio", "especie_beneficio"}
 ID_FIELDS = {"nome_documento", "cpf_documento", "filiacao_documento"}
-PAGE_SCHEMA = 11
+PAGE_SCHEMA = 12
 
 
 class ResetRequested(Exception):
@@ -794,7 +794,7 @@ def run_importer():
 
 
 AUTO_QUEUE = ".releitura-regras"
-AUTO_DONE = ".releitura-regras-v12.json"
+AUTO_DONE = ".releitura-regras-v13.json"
 AUTO_PROGRESS = ".releitura-progresso.json"
 WORKER_HEARTBEAT = ".worker-heartbeat.json"
 HEARTBEAT_MAX_AGE = 20
@@ -872,6 +872,12 @@ def schedule_rule_reads(path, detail):
                      if row.get("tipo") == "beneficio"
                      and parecer.same_person((row.get("obtido") or {}).get("titular_renda"), applicant)
                      and not (row.get("obtido") or {}).get("especie_beneficio"))
+    if any(rule["criterio"] in {"beneficio", "renda", "modalidade"} and rule["status"] == "pendente"
+           for rule in report["criterios"]):
+        pages.extend(detail["requerimentos"])
+        pages.extend(row for row in detail["paginas"] if row.get("tipo") == "beneficio"
+                     and not (row.get("obtido") or {}).get("especie_beneficio"))
+    pages = list({(row["arquivo"], row["pagina"]): row for row in pages}.values())
     targets = []
     for row in pages:
         if row.get("versao_extracao", 0) < PAGE_SCHEMA:

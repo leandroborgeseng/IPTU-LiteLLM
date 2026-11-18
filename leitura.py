@@ -44,7 +44,10 @@ REQUERIMENTO = (
     "ambas Não), renda_atividade_centavos (soma das Rendas de sócio/autônomo), "
     "trabalha_registrado (Trabalha Registrado?), nome_conjuge, conjuge_informado (false se o nome do cônjuge "
     "estiver marcado Não se aplica; true se preenchido), conjuge_beneficio_numero, conjuge_renda_centavos "
-    "(benefício do cônjuge + outras rendas do cônjuge), data_requerimento (AAAA-MM-DD do Local e data). "
+    "(total bruto de benefícios e outras rendas do cônjuge; zero somente com declaração explícita de ausência "
+    "de renda; não receber benefício não significa renda zero), requerente_renda_centavos "
+    "(renda mensal bruta TOTAL do requerente, incluindo trabalho e outras fontes; zero somente com declaração "
+    "expressa de ausência de toda renda; campo ausente ou ilegível: null), data_requerimento (AAAA-MM-DD do Local e data). "
     "Booleanos: Sim → true, Não → false.")
 
 EXTRATO = (

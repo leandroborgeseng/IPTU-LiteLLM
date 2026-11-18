@@ -257,6 +257,21 @@ def assess(process, review, cadastro=None):
             if len(species) == 1 and species <= ELEGIVEIS:
                 modalities = species
                 modality_sources = personal_benefits
+    # O benefício de cônjuge identificado também pode fundamentar o enquadramento.
+    spouse_benefits = []
+    if spouse_key and marital.startswith(("casad", "uniao", "companheir")):
+        spouse_benefits = [
+            item for item in income if item["valor"]["tipo"] == "beneficio"
+            and same_person(item["valor"]["titular_renda"], spouse)
+            and not same_person(item["valor"]["titular_renda"], applicant)
+            and modality_parts(re.sub(r"^\s*\d+\W*", "", item["valor"]["especie_beneficio"] or "")) <= ELEGIVEIS
+            and modality_parts(re.sub(r"^\s*\d+\W*", "", item["valor"]["especie_beneficio"] or ""))
+        ]
+    if not modalities and spouse_benefits:
+        modalities = set().union(*(modality_parts(re.sub(
+            r"^\s*\d+\W*", "", item["valor"]["especie_beneficio"]
+        )) for item in spouse_benefits))
+        modality_sources = spouse_benefits
     modality = "+".join(sorted(modalities)) or None
     complete = process["status"] == "em_revisao"
     eligible_modality = bool(modalities) and modalities <= ELEGIVEIS
@@ -352,6 +367,11 @@ def assess(process, review, cadastro=None):
         if not benefit_pages:
             add("beneficio", "pendente", "Nenhum extrato de benefício foi localizado.",
                 codigo="extrato_nao_localizado")
+        elif not applicant_income and spouse_benefits and not declared:
+            benefit_ok = True
+            add("beneficio", "atendido",
+                f"Benefício elegível comprovado em nome do cônjuge {spouse} ({where(spouse_benefits)}).",
+                spouse_benefits, beneficiario="conjuge")
         elif not applicant_income:
             add("beneficio", "pendente", "Extrato(s) localizado(s) sem renda bruta legível ou vínculo com o requerente.",
                 [evidence(row, row.get("tipo")) for row in benefit_pages], codigo="extrato_sem_vinculo_ou_valor")
@@ -369,7 +389,7 @@ def assess(process, review, cadastro=None):
             add("beneficio", "atendido",
                 f"Extrato(s) de benefício em nome do requerente ({where(applicant_income)})"
                 + (" com os números declarados no requerimento." if declared else "."),
-                applicant_income)
+                applicant_income, beneficiario="requerente")
     else:
         benefit_ok = True
 
@@ -384,6 +404,19 @@ def assess(process, review, cadastro=None):
     if not (has_spouse or no_spouse):
         gaps.append("estado civil ou cônjuge não identificado no requerimento")
     declared_components = []
+    if benefit_ok and not applicant_income and spouse_benefits:
+        applicant_proofs = [item for item in (estimate or {}).get("comprovantes", [])
+                            if owner[id(item)] == "requerente"]
+        declared_applicant = unique("requerente_renda_centavos")
+        if not applicant_proofs and type(declared_applicant) is int and declared_applicant >= 0:
+            extra += declared_applicant
+            sources = facts["requerente_renda_centavos"]
+            extra_sources += sources
+            declared_components.append({**sources[0], "papel": "requerente",
+                                        "valor": {"renda_bruta_centavos": declared_applicant,
+                                                  "titular_renda": applicant, "tipo": "declarado"}})
+        elif not applicant_proofs:
+            gaps.append("renda total do requerente não beneficiário não identificada")
     renewal_without_spouse_income = False
     if has_spouse:
         spouse_income = [item for item in (estimate or {}).get("comprovantes", [])
@@ -410,6 +443,9 @@ def assess(process, review, cadastro=None):
     ):
         answer = flag(field)
         amount = unique(value_field)
+        if (answer is True and not applicant_income and spouse_benefits
+                and type(unique("requerente_renda_centavos")) is int):
+            continue
         if answer is True and type(amount) is int:
             extra += amount
             sources = facts[value_field]
