@@ -375,3 +375,21 @@ class ExercicioNaoBloqueia(unittest.TestCase):
         process = change(base_process(), exercicio=None)
         process["paginas"][3]["obtido"]["renda_bruta_centavos"] = 200000
         self.assertEqual(parecer.assess(process, None)["resultado"], "nao_enquadra")
+
+
+class CruzamentoLocalVisivel(unittest.TestCase):
+    def test_mostra_vinculo_individual_sem_cpf_do_conjuge(self):
+        process = change(base_process(), estado_civil="Casado", nome_conjuge="JOAO SOUZA")
+        process["requerimentos"][0]["obtido"]["cpf_requerente"] = "74757644868"
+        key = parecer.normalize_registration(process["requerimentos"][0]["obtido"]["inscricao_imobiliaria"])
+        report = parecer.assess(process, None, {"imoveis_por_cpf": {
+            "por_cpf": {"74757644868": [key]}, "cobertura_completa": False, "carregada_em": 1}})
+        rule = criteria(report)["unicidade"]
+        self.assertEqual(rule["status"], "cadastral")
+        self.assertIn("1 inscrição(ões)", rule["motivo"])
+        self.assertIn("CPF do cônjuge não informado", rule["motivo"])
+        self.assertEqual(rule["evidencias"][0]["inscricoes_requerente"], [key])
+
+    def test_informa_carga_ausente(self):
+        rule = criteria(parecer.assess(base_process(), None))["unicidade"]
+        self.assertEqual(rule["codigo"], "carga_nao_disponivel")

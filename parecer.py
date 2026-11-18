@@ -622,9 +622,24 @@ def assess(process, review, cadastro=None):
               and lookup_cpf in by_cpf and applicant_properties == {registration_key}
               and (no_spouse or spouse_cpf in by_cpf)):
             add("unicidade", "atendido", "A carga completa da SIL confirma apenas a inscrição do pedido para os CPFs aplicáveis.", source)
+        elif property_lookup:
+            findings = []
+            if lookup_cpf in by_cpf:
+                findings.append(f"A carga local encontrou {len(applicant_properties)} inscrição(ões) para o CPF do requerente"
+                                + (" e inclui a inscrição deste pedido." if registration_key in applicant_properties else "."))
+            else:
+                findings.append("CPF do requerente não identificado ou inválido para consulta na carga local.")
+            if has_spouse and not spouse_cpf:
+                findings.append("CPF do cônjuge não informado; cruzamento do cônjuge pendente.")
+            elif not no_spouse and not spouse_cpf:
+                findings.append("Composição familiar não esclarecida para definir o cruzamento do cônjuge.")
+            if not property_lookup.get("cobertura_completa"):
+                findings.append("A carga está registrada como parcial; a unicidade depende de conferência da cobertura.")
+            add("unicidade", "cadastral", " ".join(findings), source)
         else:
-            add("unicidade", "cadastral", "Conferir os imóveis por CPF na SIL. A carga local ou os dados identificados não confirmam a unicidade.",
-                source if property_lookup else None)
+            add("unicidade", "cadastral", "Carga local da SIL não disponível no aplicativo. "
+                "Importe o CSV em Cadastro imobiliário da SIL para cruzar os CPFs.", codigo="carga_nao_disponivel")
+
 
     if any(row["status"] != "extraido" or row.get("status_ocr") == "falha_ocr" for row in pages) or any(
         doc["erro"] and doc["erro"] != "formato_nao_processado" for doc in process["arquivos"]
